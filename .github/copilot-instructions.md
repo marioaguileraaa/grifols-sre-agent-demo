@@ -1,38 +1,15 @@
-<!-- Use this file to provide workspace-specific custom instructions to Copilot. For more details, visit https://code.visualstudio.com/docs/copilot/copilot-customization#_use-a-githubcopilotinstructionsmd-file -->
+# Grifols Plasma Supply fictional SRE demo
 
-# Grubify Food Delivery App
-
-This is a modern food delivery application with a React TypeScript frontend and .NET backend, designed for deployment to Azure Container Apps.
-
-## Tech Stack
-- **Frontend**: React 18 with TypeScript, Material-UI, React Router
-- **Backend**: .NET 9 Web API with Controllers
-- **Deployment**: Azure Container Apps
-- **Infrastructure**: Bicep templates
-
-## Architecture
-- Clean separation between frontend and backend
-- RESTful API design
-- Responsive Material-UI components
-- Azure Container Apps for scalable hosting
-
-## Development Guidelines
-- Use TypeScript strict mode
-- Follow Material-UI design patterns
-- Implement proper error handling
-- Use async/await for API calls
-- Follow RESTful conventions for API endpoints
-
-## API Endpoints
-- `/api/restaurants` - Restaurant management
-- `/api/fooditems` - Food item management  
-- `/api/cart` - Shopping cart operations
-- `/api/orders` - Order management
-
-## UI Components
-- Modern, responsive design inspired by popular food delivery apps
-- Card-based layouts for restaurants and food items
-- Step-by-step checkout process
-- Real-time order tracking
-
-When working on this project, prioritize user experience, maintain clean code architecture, and ensure proper error handling throughout the application.
+- Treat every center, facility, requisition, supply, shipment, correlation ID, and metric as synthetic demo data.
+- Keep the visible disclaimer: this is not an official Grifols system, contains no patient/clinical data, makes no real-product/process claims, and provides no medical advice.
+- Use the text wordmark only; do not introduce an official logo.
+- Preserve the domain names: DistributionCenter, TherapySupply, Requisition, ColdChainDispatch, and Shipment.
+- The final dispatch operation is the only intentional incident surface.
+- Keep `DEMO_COLD_CHAIN_FAILURE_RATE` typed and startup-validated from 0 through 100.
+- At 100, preserve HTTP 503, code `COLD_CHAIN_GATEWAY_UNAVAILABLE`, safe message, and correlation ID.
+- Keep structured logs with correlation/requisition/shipment IDs, synthetic center, error code, and fictional root-cause clue; never log secrets.
+- Azure SRE Agent stays `accessLevel=Low` and `mode=Review`.
+- Do not broaden RBAC beyond the documented roles.
+- ACR pulls use the application UAMI only; never use registry passwords.
+- Do not deploy from tests or CI. Azure changes require account/subscription/resource-group safeguards.
+- GitHub PAT/OAuth credentials may exist only in process environment or interactive OAuth; never persist them.
