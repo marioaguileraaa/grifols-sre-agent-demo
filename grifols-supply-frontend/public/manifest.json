@@ -1,0 +1,8 @@
+{
+  "short_name": "Plasma Supply Demo",
+  "name": "Grifols Plasma Supply - Fictional SRE Demo",
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#005a8b",
+  "background_color": "#ffffff"
+}

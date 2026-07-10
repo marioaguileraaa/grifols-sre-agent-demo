@@ -1,22 +1,13 @@
-name: grubify
+name: grifols-plasma-supply-sre-demo
 metadata:
-  template: grubify-food-delivery@0.0.1-beta
+  template: grifols-plasma-supply-sre-agent-demo@1.0.0
 
 services:
   api:
-    project: ./GrubifyApi
+    project: ./GrifolsSupply.Api
     language: dotnet
     host: containerapp
-
   frontend:
-    project: ./grubify-frontend
+    project: ./grifols-supply-frontend
     language: js
     host: containerapp
-
-hooks:
-  postdeploy:
-    shell: pwsh
-    run: |
-      echo "🍕 Grubify Food Delivery App deployed successfully!"
-      echo "Frontend URL: $env:FRONTEND_URL"
-      echo "API URL: $env:API_BASE_URL"

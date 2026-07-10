@@ -1,23 +1,11 @@
 param name string
 param location string = resourceGroup().location
-param tags object = {}
+param tags object
+param logAnalyticsCustomerId string
+@secure()
+param logAnalyticsSharedKey string
 
-resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
-  name: '${name}-logs'
-  location: location
-  tags: tags
-  properties: any({
-    retentionInDays: 30
-    features: {
-      searchVersion: 1
-    }
-    sku: {
-      name: 'PerGB2018'
-    }
-  })
-}
-
-resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2023-05-01' = {
+resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: name
   location: location
   tags: tags
@@ -25,13 +13,14 @@ resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2023-05-01'
     appLogsConfiguration: {
       destination: 'log-analytics'
       logAnalyticsConfiguration: {
-        customerId: logAnalyticsWorkspace.properties.customerId
-        sharedKey: logAnalyticsWorkspace.listKeys().primarySharedKey
+        customerId: logAnalyticsCustomerId
+        sharedKey: logAnalyticsSharedKey
       }
     }
+    zoneRedundant: false
   }
 }
 
-output id string = containerAppsEnvironment.id
-output name string = containerAppsEnvironment.name
-output defaultDomain string = containerAppsEnvironment.properties.defaultDomain
+output id string = environment.id
+output name string = environment.name
+output defaultDomain string = environment.properties.defaultDomain
