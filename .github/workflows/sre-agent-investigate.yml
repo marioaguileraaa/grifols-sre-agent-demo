@@ -3,28 +3,31 @@ name: SRE Agent controlled investigation
 on:
   issues:
     types: [labeled]
+  workflow_dispatch:
+    inputs:
+      syntheticIncidentId:
+        description: Synthetic incident identifier
+        required: true
+        type: string
 
 permissions:
   contents: read
   issues: read
-  id-token: write
 
 jobs:
   investigate:
     if: >-
-      contains(github.event.issue.labels.*.name, 'sre-agent-demo') &&
-      contains(github.event.issue.labels.*.name, 'incident')
+      github.event_name == 'workflow_dispatch' ||
+      (
+        startsWith(github.event.issue.title, '[SYNTHETIC]') &&
+        contains(github.event.issue.labels.*.name, 'sre-investigate')
+      )
     runs-on: ubuntu-latest
     steps:
-      - name: Sign in to Azure with workload identity
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
       - name: Build safe trigger payload
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          SYNTHETIC_INCIDENT_ID: ${{ inputs.syntheticIncidentId }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
@@ -32,24 +35,37 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           jq -n \
-            --arg source "github-issues" \
+            --arg source "$EVENT_NAME" \
+            --arg syntheticIncidentId "$SYNTHETIC_INCIDENT_ID" \
             --arg repository "$REPOSITORY" \
             --arg issueNumber "$ISSUE_NUMBER" \
             --arg title "$ISSUE_TITLE" \
             --arg body "$ISSUE_BODY" \
             --arg url "$ISSUE_URL" \
-            '{source:$source,repository:$repository,issueNumber:$issueNumber,title:$title,body:$body,url:$url,dataClassification:"synthetic"}' \
-            > "$RUNNER_TEMP/sre-payload.json"
+            '{
+              source: $source,
+              syntheticIncidentId: $syntheticIncidentId,
+              repository: $repository,
+              issueNumber: $issueNumber,
+              title: $title,
+              body: $body,
+              url: $url,
+              dataClassification: "synthetic"
+            }' > "$RUNNER_TEMP/sre-payload.json"
 
       - name: Trigger Review-mode investigation
         env:
           SRE_TRIGGER_URL: ${{ secrets.SRE_TRIGGER_URL }}
         run: |
-          token="$(az account get-access-token --resource 59f0a04a-b322-4310-adc9-39ac41e9631e --query accessToken -o tsv)"
-          status="$(curl --silent --show-error --output "$RUNNER_TEMP/sre-response.json" --write-out '%{http_code}' \
+          status="$(curl --silent --show-error \
+            --output "$RUNNER_TEMP/sre-response.json" \
+            --write-out '%{http_code}' \
             --request POST "$SRE_TRIGGER_URL" \
-            --header "Authorization: Bearer $token" \
             --header "Content-Type: application/json" \
             --data-binary "@$RUNNER_TEMP/sre-payload.json")"
-          test "$status" = "202" || { cat "$RUNNER_TEMP/sre-response.json"; exit 1; }
-          jq -e '.success == true and (.threadId | length > 0)' "$RUNNER_TEMP/sre-response.json"
+          test "$status" = "202" || {
+            cat "$RUNNER_TEMP/sre-response.json"
+            exit 1
+          }
+          jq -e '.success == true and (.threadId | type == "string" and length > 0)' \
+            "$RUNNER_TEMP/sre-response.json"

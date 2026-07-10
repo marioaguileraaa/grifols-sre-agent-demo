@@ -24,7 +24,7 @@ flowchart LR
     AL --> S[Azure SRE Agent<br/>Low + Review]
     S --> L
     S --> I[Application Insights<br/>workspace-based]
-    S --> R[Repositorio público<br/>rama main]
+    S --> R[GitHub Code Access autenticado<br/>rama main]
     C[ACR Basic] -. pull con UAMI .-> W
     C -. pull con UAMI .-> A
 ```
@@ -98,7 +98,9 @@ Desplegar y compilar remotamente:
 .\scripts\deploy.ps1
 ```
 
-El script provisiona Bicep, ejecuta dos `az acr build`, actualiza imágenes, mantiene `DEMO_COLD_CHAIN_FAILURE_RATE=0`, espera revisiones `Healthy/Running` e imprime las URLs.
+El script usa dos pases convergentes: primero despliega los placeholders con puerto/probe `/` en `80`; después ejecuta dos `az acr build` y vuelve a desplegar Bicep con las imágenes finales. El segundo pase fija backend `8080` + `/healthz`, frontend `80` + `/`, `BACKEND_URL`, registro/UAMI y `DEMO_COLD_CHAIN_FAILURE_RATE=0`. Finalmente espera ambas revisiones `Healthy/Running` y prueba salud, reserva, tracking, frontend y proxy same-origin `/api/healthz`.
+
+El navegador solo llama rutas relativas `/api`. Nginx resuelve `BACKEND_URL` al arrancar y actúa como proxy; no se reescribe JavaScript ni se depende de CORS en producción. Para desarrollo, Create React App usa el proxy local `http://localhost:5291`.
 
 ## Configuración de Azure SRE Agent
 
@@ -111,12 +113,13 @@ La plantilla usa `Microsoft.App/agents@2026-01-01` con:
 - resource group administrado `rg-demo-sre-agent-v1`;
 - telemetría propia en Application Insights.
 
-No se configura un límite mensual porque `monthlyAgentUnitLimit` no forma parte del esquema estable `2026-01-01`; añadirlo exigiría volver deliberadamente al API preview del recurso padre.
+`configure-sre-agent.ps1` aplica y verifica `monthlyAgentUnitLimit=1000` mediante PATCH del control plane preview, manteniendo el recurso base tipado con `2026-01-01`.
 
 RBAC de `id-grifols-sre-v1`:
 
 - `Reader`, `Log Analytics Reader`, `Monitoring Reader` y `Container Apps Contributor` sobre el resource group;
 - `Monitoring Contributor` sobre la suscripción para el ciclo de vida de alertas;
+- `SRE Agent Administrator` para `id-grifols-sre-v1` sobre el recurso del agente;
 - no se concede `Contributor` general.
 
 Después del ARM/Bicep:
@@ -128,38 +131,49 @@ az login --scope "https://azuresre.dev/.default"
 
 El script:
 
-1. obtiene `agentEndpoint` desde ARM;
-2. conecta el repositorio público `marioaguileraaa/grifols-sre-agent-demo`, rama `main`, por `/api/v2/repos`;
-3. valida `cloneStatus` por separado;
-4. valida por separado los conectores ARM de Log Analytics y Application Insights;
-5. crea el subagente `code-analyzer`;
-6. crea el filtro Sev2 `grifols-cold-chain-sev2` en modo Review;
-7. crea un HTTP trigger y muestra el valor que debe almacenarse como secreto `SRE_TRIGGER_URL`.
+1. concede idempotentemente al usuario actual `SRE Agent Administrator` en el agente y espera propagación;
+2. aplica/verifica el límite mensual `1000` y confirma `AzMonitor`, `Review` y `Low`;
+3. configura autenticación GitHub con PAT de entorno o exige completar OAuth;
+4. hace PUT del repositorio `marioaguileraaa/grifols-sre-agent-demo`, rama `main`, y espera `cloneStatus=Ready`;
+5. valida que los conectores ARM de Log Analytics y Application Insights usan `id-grifols-sre-v1`;
+6. crea/actualiza y verifica `code-analyzer` y el filtro Sev2 Review;
+7. crea o actualiza idempotentemente el HTTP trigger con `agentPrompt`, `agent` y `mode=Review`;
+8. opcionalmente guarda el webhook mediante `-SetGitHubSecret`.
 
 Las extensiones de conectores y los extras data-plane siguen usando APIs preview `2025-05-01-preview`/`api/v2`; el script falla de forma explícita si el contrato cambia.
 
-### Límite OAuth/manual de GitHub
+### Límite OAuth/PAT de GitHub
 
-La lectura del repositorio público se intenta sin credenciales y debe completar `cloneStatus`. OAuth/PAT **no es necesario** para investigar código público. Solo si se habilitan operaciones de escritura:
+GitHub Code Access siempre requiere un dominio autenticado con OAuth o PAT, incluso para indexar este repositorio público. Con un PAT temporal:
 
 ```powershell
-.\scripts\configure-sre-agent.ps1 -EnableGitHubWrite
+$env:GITHUB_PAT = '<PAT con scope repo>'
+.\scripts\configure-sre-agent.ps1 -SetGitHubSecret
+Remove-Item Env:GITHUB_PAT
 ```
 
-Con `GITHUB_PAT` en el entorno del proceso se usa el PAT sin escribirlo en archivos ni mostrarlo. Sin PAT, el script imprime un checkpoint OAuth interactivo. Esa aprobación manual no puede automatizarse de forma segura.
+El script envía el PAT al almacenamiento seguro del dominio del agente y no lo imprime ni escribe en repositorio/disco. Sin `GITHUB_PAT` ni dominio ya autenticado, imprime la URL OAuth y termina como `INCOMPLETE`; hay que completar OAuth y repetir el script.
 
 ## Configuración del workflow controlado
 
-`.github/workflows/sre-agent-investigate.yml` solo responde cuando el issue contiene ambas etiquetas `incident` y `sre-agent-demo`. El payload se crea con `jq --arg`, por lo que título y cuerpo no se interpolan como shell.
+`.github/workflows/sre-agent-investigate.yml` responde a:
 
-Configurar:
+- un issue donde la única etiqueta evaluada es `sre-investigate` y el título empieza por `[SYNTHETIC]`;
+- un `workflow_dispatch` manual con `syntheticIncidentId`.
 
-- secreto `SRE_TRIGGER_URL`;
-- variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`;
-- federated credential OIDC para ese repositorio y workflow;
-- permiso `Microsoft.App/agents/threads/write` para la identidad del workflow.
+El payload se construye con `jq --arg`, por lo que título/cuerpo/input no se interpolan como shell. El único secreto es `SRE_TRIGGER_URL`; no hay Azure login, OIDC, variables Azure, token ni header `Authorization`.
 
-La llamada obtiene un token Entra para el audience del HTTP trigger; no usa autenticación anónima ni placeholders.
+El secreto apunta al endpoint público documentado `/api/v1/httptriggers/trigger/{id}`. El workflow acepta únicamente HTTP `202` y verifica `success=true` y `threadId`.
+
+```powershell
+# Crear el issue controlado
+.\scripts\create-sample-issue.ps1
+
+# Alternativa manual sin issue
+gh workflow run sre-agent-investigate.yml `
+  --repo marioaguileraaa/grifols-sre-agent-demo `
+  -f syntheticIncidentId=manual-demo-001
+```
 
 ## Prueba normal
 
@@ -214,7 +228,10 @@ Consultar el runbook detallado en [`docs/runbooks/cold-chain-reservation-5xx.md`
 - [ ] Diez fallos cruzan el umbral `GreaterThan 5`.
 - [ ] Logs contienen centro, requisición, error code y root-cause clue.
 - [ ] SRE Agent está en `Low` + `Review`.
+- [ ] `monthlyAgentUnitLimit=1000` y plataforma `AzMonitor`.
 - [ ] Conectores ARM, `cloneStatus`, subagente y filtro están validados por separado.
+- [ ] Frontend usa `/api`, Nginx usa `BACKEND_URL` y los probes finales están sanos.
+- [ ] Workflow usa solo `SRE_TRIGGER_URL`, label `sre-investigate` y prefijo `[SYNTHETIC]`.
 - [ ] Mitigación requiere aprobación.
 - [ ] Recuperación devuelve tracking ID.
 - [ ] Ningún PAT, OAuth token, password de ACR o secret aparece en el repositorio.
@@ -237,7 +254,7 @@ az bicep build --file .\infra\main.bicep
 
 ## Costes
 
-El demo genera coste por Container Apps, ingesta/retención de Log Analytics, Application Insights, ACR, Azure Monitor y unidades de Azure SRE Agent. ACR usa Basic, LAW retiene 30 días y las apps parten de una réplica mínima. El límite mensual de unidades del agente debe configurarse manualmente en el portal si la API estable aún no lo soporta. Detener el incidente no elimina el coste base.
+El demo genera coste por Container Apps, ingesta/retención de Log Analytics, Application Insights, ACR, Azure Monitor y unidades de Azure SRE Agent. ACR usa Basic, LAW retiene 30 días y las apps parten de una réplica mínima. El script fija el límite mensual activo en 1000 AAU; el consumo always-on puede quedar fuera de ese límite. Detener el incidente no elimina el coste base.
 
 ## Limpieza
 
@@ -248,7 +265,7 @@ az resource list --subscription 5305e853-a63b-4b82-9a3f-6fde18c1a798 `
   --resource-group rg-demo-sre-agent-v1 --output table
 ```
 
-Eliminar solo los recursos etiquetados `purpose=sre-agent-demo` tras aprobación del propietario. Quitar también federated credentials, secretos/variables del workflow y asignaciones RBAC específicas.
+Eliminar solo los recursos etiquetados `purpose=sre-agent-demo` tras aprobación del propietario. Quitar también `SRE_TRIGGER_URL`, autenticación de dominio GitHub y asignaciones RBAC específicas.
 
 ## Troubleshooting
 
@@ -256,10 +273,10 @@ Eliminar solo los recursos etiquetados `purpose=sre-agent-demo` tras aprobación
 |---|---|
 | Salvaguarda de suscripción falla | `az account set --subscription 5305e853-a63b-4b82-9a3f-6fde18c1a798` |
 | Revisión no está `Healthy/Running` | `az containerapp revision list -g rg-demo-sre-agent-v1 -n ca-grifols-supply-api -o table` |
-| Frontend no llega a API | comprobar `REACT_APP_API_BASE_URL` y `AllowedOrigins__0` |
+| Frontend no llega a API | comprobar `BACKEND_URL`, plantilla Nginx y `/api/healthz` |
 | No aparece alerta | validar dimensión `statusCodeCategory=5xx`, ventana de 5 min y diez 503 |
 | No hay logs | comprobar `ContainerAppConsoleLogs_CL` y configuración LAW del environment |
-| ARM del agente funciona pero no extras | ejecutar `configure-sre-agent.ps1`; revisar `cloneStatus` y cada conector |
+| ARM del agente funciona pero no extras | ejecutar `configure-sre-agent.ps1`; revisar rol Administrator, GitHub domain, `cloneStatus=Ready` y cada conector UAMI |
 | Token data-plane falla | `az login --scope "https://azuresre.dev/.default"` |
-| Workflow devuelve 401/403 | revisar OIDC, audience `59f0a04a-b322-4310-adc9-39ac41e9631e` y `threads/write` |
-| Escritura GitHub no disponible | completar checkpoint OAuth manual o usar PAT solo en entorno de proceso |
+| Workflow no obtiene 202 | revisar únicamente el secreto `SRE_TRIGGER_URL` y que sea `/api/v1/httptriggers/trigger/{id}` |
+| Configuración termina `INCOMPLETE` | completar la URL OAuth o volver a ejecutar con `GITHUB_PAT` solo en entorno de proceso |

@@ -4,7 +4,7 @@ param(
     [string] $Repository = 'marioaguileraaa/grifols-sre-agent-demo'
 )
 
-$title = '[SRE demo] Cold-chain dispatch reservation returns 503'
+$title = '[SYNTHETIC] Cold-chain dispatch reservation returns 503'
 $body = @'
 ## Synthetic incident
 
@@ -17,14 +17,22 @@ The fictional Grifols Plasma Supply demo is returning `COLD_CHAIN_GATEWAY_UNAVAI
 - Review-mode investigation; mitigation requires approval
 '@
 
-if ($PSCmdlet.ShouldProcess($Repository, 'Create controlled incident issue')) {
+if ($PSCmdlet.ShouldProcess($Repository, 'Create controlled synthetic incident issue')) {
+    gh label create sre-investigate `
+        --repo $Repository `
+        --description 'Allow the SRE Agent to investigate a synthetic demo issue' `
+        --color 0E8A16 `
+        --force
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Unable to ensure the sre-investigate label exists.'
+    }
+
     gh issue create `
         --repo $Repository `
         --title $title `
         --body $body `
-        --label incident `
-        --label sre-agent-demo
+        --label sre-investigate
     if ($LASTEXITCODE -ne 0) {
-        throw 'Unable to create the sample incident issue.'
+        throw 'Unable to create the sample synthetic incident issue.'
     }
 }

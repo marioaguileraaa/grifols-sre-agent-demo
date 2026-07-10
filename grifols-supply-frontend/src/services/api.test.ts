@@ -19,7 +19,7 @@ test('returns shipment data from a healthy dispatch reservation', async () => {
 
   expect(shipment.trackingId).toBe('GPS-20260710-TEST');
   expect(global.fetch).toHaveBeenCalledWith(
-    expect.stringContaining('/cold-chain-dispatch'),
+    '/api/cold-chain-dispatch',
     expect.objectContaining({ method: 'POST' }),
   );
 });

@@ -15,6 +15,8 @@ param apiImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:la
 @description('Frontend image. The deployment script replaces the placeholder after remote ACR build.')
 param frontendImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
+var placeholderImage = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+var apiIsPlaceholder = apiImage == placeholderImage
 var tags = {
   purpose: 'sre-agent-demo'
   environment: 'demo'
@@ -38,6 +40,7 @@ var logAnalyticsReaderRoleId = subscriptionResourceId('Microsoft.Authorization/r
 var monitoringReaderRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '43d0d8ad-25c7-4714-9337-8ba259a9fe05')
 var containerAppsContributorRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '358470bc-b998-42bd-ab17-a7e34c199c0f')
 var monitoringContributorRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '749f88d5-cbae-40b8-bcfc-e573ddc772fa')
+var sreAgentAdministratorRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'e79298df-d852-4c6d-84f9-5d13249d1e55')
 
 module observability 'core/observability.bicep' = {
   name: 'observability'
@@ -109,7 +112,8 @@ module backend 'core/host/container-app.bicep' = {
     managedIdentityId: appIdentity.id
     containerName: 'grifols-supply-api'
     containerImage: apiImage
-    targetPort: 8080
+    targetPort: apiIsPlaceholder ? 80 : 8080
+    probePath: apiIsPlaceholder ? '/' : '/healthz'
     maxReplicas: 1
     env: [
       {
@@ -119,10 +123,6 @@ module backend 'core/host/container-app.bicep' = {
       {
         name: 'DEMO_COLD_CHAIN_FAILURE_RATE'
         value: '0'
-      }
-      {
-        name: 'AllowedOrigins__0'
-        value: 'https://${frontendName}.${containerEnvironment.outputs.defaultDomain}'
       }
     ]
   }
@@ -143,10 +143,11 @@ module frontend 'core/host/container-app.bicep' = {
     containerName: 'grifols-supply-web'
     containerImage: frontendImage
     targetPort: 80
+    probePath: '/'
     env: [
       {
-        name: 'REACT_APP_API_BASE_URL'
-        value: 'https://${backend.outputs.fqdn}/api'
+        name: 'BACKEND_URL'
+        value: 'https://${backend.outputs.fqdn}'
       }
     ]
   }
@@ -313,6 +314,16 @@ resource sreAgent 'Microsoft.App/agents@2026-01-01' = {
   ]
 }
 
+resource sreIdentityAgentAdministrator 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: sreAgent
+  name: guid(sreAgent.id, sreIdentity.id, sreAgentAdministratorRoleId)
+  properties: {
+    principalId: sreIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: sreAgentAdministratorRoleId
+  }
+}
+
 resource logAnalyticsConnector 'Microsoft.App/agents/connectors@2025-05-01-preview' = {
   parent: sreAgent
   name: 'log-analytics'
@@ -325,7 +336,7 @@ resource logAnalyticsConnector 'Microsoft.App/agents/connectors@2025-05-01-previ
         name: observability.outputs.workspaceName
       }
     }
-    identity: 'system'
+    identity: sreIdentity.id
   }
 }
 
@@ -342,7 +353,7 @@ resource appInsightsConnector 'Microsoft.App/agents/connectors@2025-05-01-previe
       }
       appId: observability.outputs.applicationInsightsAppId
     }
-    identity: 'system'
+    identity: sreIdentity.id
   }
 }
 

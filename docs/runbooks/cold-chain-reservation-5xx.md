@@ -9,6 +9,8 @@
 - Error esperado: HTTP `503`, `COLD_CHAIN_GATEWAY_UNAVAILABLE`.
 - Alerta: `alert-grifols-backend-5xx`, severidad 2, más de cinco `Requests` con `statusCodeCategory=5xx` en cinco minutos, evaluación cada minuto.
 - Cambio reversible: `DEMO_COLD_CHAIN_FAILURE_RATE` de `100` a `0`.
+- Generador: diez 503 deterministas en menos de cinco minutos.
+- Agente: `Low`, `Review`, `AzMonitor`, límite mensual activo `1000`.
 
 ## 1. Confirmar Azure Monitor
 
@@ -99,7 +101,7 @@ Confirmar:
 
 ## 4. Correlacionar con repositorio
 
-En la rama pública `main`, revisar:
+En la rama autenticada/indexada `main` (`cloneStatus=Ready`), revisar:
 
 - `GrifolsSupply.Api/Options/ColdChainDemoOptions.cs`: validación 0–100;
 - `GrifolsSupply.Api/Services/ColdChainDispatchService.cs`: fallo determinista, código estable, pista y logs;
@@ -109,7 +111,36 @@ En la rama pública `main`, revisar:
 
 Azure SRE Agent debe citar archivo y línea, contrastar la revisión activa y operar en modo Review.
 
-## 5. Proponer mitigación
+Antes de confiar en la investigación, confirmar:
+
+- conectores LAW/App Insights con identidad `id-grifols-sre-v1`;
+- subagente `code-analyzer`;
+- filtro `grifols-cold-chain-sev2` con `agentMode=Review`;
+- `incidentManagementConfiguration.type=AzMonitor`;
+- `monthlyAgentUnitLimit=1000`.
+
+## 5. Trigger controlado
+
+El workflow solo usa el secreto `SRE_TRIGGER_URL` apuntando al webhook público
+`/api/v1/httptriggers/trigger/{id}`. No usa Azure login ni header de autenticación.
+
+Un issue debe tener:
+
+- título con prefijo `[SYNTHETIC]`;
+- etiqueta de control evaluada `sre-investigate`.
+
+Alternativamente, ejecutar `workflow_dispatch` con `syntheticIncidentId`. La respuesta
+correcta es HTTP `202`, `success=true` y `threadId` no vacío.
+
+```powershell
+.\scripts\create-sample-issue.ps1
+
+gh workflow run sre-agent-investigate.yml `
+  --repo marioaguileraaa/grifols-sre-agent-demo `
+  -f syntheticIncidentId=manual-demo-001
+```
+
+## 6. Proponer mitigación
 
 Mitigación mínima:
 
@@ -129,7 +160,7 @@ No aprobar:
 - eliminación de recursos;
 - cambios que oculten errores o silencien logs.
 
-## 6. Aprobar en Review
+## 7. Aprobar en Review
 
 Verificar antes de aprobar:
 
@@ -139,7 +170,7 @@ Verificar antes de aprobar:
 - ausencia de secretos;
 - plan de verificación incluido.
 
-## 7. Verificar recuperación
+## 8. Verificar recuperación
 
 ```powershell
 .\scripts\recover-incident.ps1
@@ -158,6 +189,17 @@ ContainerAppConsoleLogs_CL
 ```
 
 Confirmar una reserva correcta después de la nueva revisión y ausencia de nuevos 503. La alerta puede tardar una ventana en resolver.
+
+Comprobar también el camino same-origin:
+
+```powershell
+Invoke-WebRequest https://<frontend-fqdn>/ -SkipHttpErrorCheck
+Invoke-WebRequest https://<frontend-fqdn>/api/healthz -SkipHttpErrorCheck
+```
+
+El primer despliegue usa placeholder en puerto 80; el segundo pase Bicep debe converger
+a backend 8080 con probes `/healthz`, frontend 80 con probe `/`, imágenes ACR y
+`BACKEND_URL` al origen del backend.
 
 ## Plantilla de informe de incidente
 

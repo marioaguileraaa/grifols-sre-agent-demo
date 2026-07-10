@@ -6,33 +6,98 @@ param(
     [string] $AgentName = 'sre-agent-grifols-v1',
     [string] $RepositoryUrl = 'https://github.com/marioaguileraaa/grifols-sre-agent-demo',
     [string] $RepositoryName = 'grifols-sre-agent-demo',
-    [switch] $EnableGitHubWrite
+    [string] $GitHubRepository = 'marioaguileraaa/grifols-sre-agent-demo',
+    [ValidateRange(500, 1000000)]
+    [int] $MonthlyAgentUnitLimit = 1000,
+    [switch] $SetGitHubSecret
 )
 
 . "$PSScriptRoot\AzureDemo.Common.ps1"
 
-Assert-DemoAzureContext -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName
+$sreAdministratorRoleId = 'e79298df-d852-4c6d-84f9-5d13249d1e55'
+$previewApiVersion = '2025-05-01-preview'
+$triggerName = 'grifols-controlled-issue'
 $agentResourceId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.App/agents/$AgentName"
-$agent = az rest `
-    --method get `
-    --url "https://management.azure.com${agentResourceId}?api-version=2026-01-01" `
-    --output json | ConvertFrom-Json
-if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($agent.properties.agentEndpoint)) {
-    throw 'The SRE Agent ARM resource exists but did not expose an agentEndpoint.'
+$agentArmUrl = "https://management.azure.com${agentResourceId}"
+
+Assert-DemoAzureContext -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName
+
+$signedInUserId = az ad signed-in-user show --query id --output tsv
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($signedInUserId)) {
+    throw 'A signed-in Azure user is required to configure the SRE Agent data plane.'
 }
 
-$accessToken = az account get-access-token `
-    --resource 'https://azuresre.dev' `
-    --query accessToken `
-    --output tsv
-if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accessToken)) {
-    throw 'Unable to acquire an Azure SRE Agent data-plane token. Run: az login --scope https://azuresre.dev/.default'
+$existingAdminAssignments = az role assignment list `
+    --assignee-object-id $signedInUserId `
+    --scope $agentResourceId `
+    --output json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) {
+    throw 'Unable to inspect SRE Agent Administrator assignments.'
+}
+
+$hasAdministratorRole = $existingAdminAssignments | Where-Object {
+    $_.roleDefinitionId -match "/$sreAdministratorRoleId$"
+}
+if (-not $hasAdministratorRole) {
+    az role assignment create `
+        --assignee-object-id $signedInUserId `
+        --assignee-principal-type User `
+        --role $sreAdministratorRoleId `
+        --scope $agentResourceId `
+        --output none
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Unable to grant the signed-in user SRE Agent Administrator at agent scope.'
+    }
+    Write-Host 'Granted the signed-in user SRE Agent Administrator at agent scope.'
+} else {
+    Write-Host 'Signed-in user already has SRE Agent Administrator at agent scope.'
+}
+
+$limitPatch = @{
+    properties = @{
+        monthlyAgentUnitLimit = $MonthlyAgentUnitLimit
+    }
+} | ConvertTo-Json -Depth 4 -Compress
+az rest `
+    --method patch `
+    --url "${agentArmUrl}?api-version=$previewApiVersion" `
+    --headers 'Content-Type=application/json' `
+    --body $limitPatch `
+    --output none
+if ($LASTEXITCODE -ne 0) {
+    throw 'Unable to configure monthlyAgentUnitLimit through the control plane.'
+}
+
+$agent = az rest `
+    --method get `
+    --url "${agentArmUrl}?api-version=$previewApiVersion" `
+    --output json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($agent.properties.agentEndpoint)) {
+    throw 'The SRE Agent ARM resource did not expose an agentEndpoint.'
 }
 
 $endpoint = $agent.properties.agentEndpoint.TrimEnd('/')
-$headers = @{
-    Authorization = "Bearer $accessToken"
-    'Content-Type' = 'application/json'
+$script:dataPlaneHeaders = $null
+
+function Get-ResponseItems {
+    param(
+        [object] $Response,
+        [string[]] $PropertyNames
+    )
+
+    if ($null -eq $Response) {
+        return @()
+    }
+    if ($Response -is [array]) {
+        return @($Response)
+    }
+    foreach ($propertyName in $PropertyNames) {
+        $property = $Response.PSObject.Properties[$propertyName]
+        if ($null -ne $property -and $null -ne $property.Value) {
+            return @($property.Value)
+        }
+    }
+    return @($Response)
 }
 
 function Invoke-AgentApi {
@@ -48,7 +113,7 @@ function Invoke-AgentApi {
     $parameters = @{
         Method = $Method
         Uri = "$endpoint$Path"
-        Headers = $headers
+        Headers = $script:dataPlaneHeaders
     }
     if ($null -ne $Body) {
         $parameters.ContentType = 'application/json'
@@ -57,34 +122,102 @@ function Invoke-AgentApi {
     Invoke-RestMethod @parameters
 }
 
+$dataPlaneDeadline = (Get-Date).AddMinutes(10)
+$lastDataPlaneError = $null
+do {
+    try {
+        $accessToken = az account get-access-token `
+            --resource 'https://azuresre.dev' `
+            --query accessToken `
+            --output tsv
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accessToken)) {
+            throw 'Unable to acquire an Azure SRE Agent data-plane token.'
+        }
+        $script:dataPlaneHeaders = @{
+            Authorization = "Bearer $accessToken"
+            'Content-Type' = 'application/json'
+        }
+        Invoke-AgentApi -Method Get -Path '/api/v2/repos' -Body $null | Out-Null
+        $lastDataPlaneError = $null
+        break
+    } catch {
+        $lastDataPlaneError = $_
+        Start-Sleep -Seconds 15
+    }
+} while ((Get-Date) -lt $dataPlaneDeadline)
+
+if ($null -ne $lastDataPlaneError) {
+    throw "SRE Agent Administrator propagation did not complete within ten minutes: $($lastDataPlaneError.Exception.Message)"
+}
+
+$domainsResponse = Invoke-AgentApi -Method Get -Path '/api/v2/github/domains' -Body $null
+$domains = Get-ResponseItems -Response $domainsResponse -PropertyNames @('value', 'domains', 'items')
+$githubDomain = $domains | Where-Object {
+    ($_.name ?? $_.domain ?? $_.properties.domain) -in @('github_com', 'github.com')
+} | Select-Object -First 1
+$githubDomainStatus = $githubDomain.properties.status `
+    ?? $githubDomain.properties.connectionStatus `
+    ?? $githubDomain.status `
+    ?? $githubDomain.connectionStatus
+$domainReady = $null -ne $githubDomain -and $githubDomainStatus -in @('Connected', 'Ready', 'Authenticated', 'Succeeded')
+
+if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_PAT)) {
+    Invoke-AgentApi -Method Put -Path '/api/v2/github/domains/github_com' -Body @{
+        AuthType = 'Pat'
+        Pat = $env:GITHUB_PAT
+    } | Out-Null
+    Write-Host 'GitHub PAT submitted to Azure SRE Agent secure domain storage; it was not printed or written to repository/disk.'
+    $domainReady = $true
+} elseif (-not $domainReady) {
+    $oauth = Invoke-AgentApi -Method Get -Path '/api/v2/github/oauth/config' -Body $null
+    Write-Host 'INCOMPLETE: GitHub authentication is required before source indexing.'
+    Write-Host 'Complete OAuth in a browser, then rerun this script:'
+    Write-Host $oauth.oAuthUrl
+    throw 'INCOMPLETE: no authenticated GitHub domain or GITHUB_PAT was available.'
+} else {
+    Write-Host "Using existing authenticated GitHub domain. Status=$githubDomainStatus"
+}
+
 $repositoryBody = @{
-    name = $RepositoryName
-    type = 'CodeRepo'
     properties = @{
         url = $RepositoryUrl
         type = 'GitHub'
         branch = 'main'
-        description = 'Public synthetic Grifols Plasma Supply SRE demo source'
+        description = 'Synthetic Grifols Plasma Supply SRE demo source'
     }
 }
 Invoke-AgentApi -Method Put -Path "/api/v2/repos/$RepositoryName" -Body $repositoryBody | Out-Null
-$repoTest = Invoke-AgentApi -Method Post -Path "/api/v2/repos/$RepositoryName/test" -Body @{}
-$repoStatus = Invoke-AgentApi -Method Get -Path "/api/v2/repos/$RepositoryName" -Body $null
-$cloneStatus = $repoStatus.properties.cloneStatus ?? $repoTest.cloneStatus ?? $repoTest.status
-if ($cloneStatus -notin @('Succeeded', 'Success', 'Ready', 'Completed')) {
-    throw "Public repository configuration did not reach a successful cloneStatus. Reported: '$cloneStatus'. No OAuth/PAT was stored."
+
+$repoDeadline = (Get-Date).AddMinutes(10)
+do {
+    $repoStatus = Invoke-AgentApi -Method Get -Path "/api/v2/repos/$RepositoryName" -Body $null
+    $cloneStatus = $repoStatus.properties.cloneStatus ?? $repoStatus.cloneStatus
+    if ($cloneStatus -eq 'Ready') {
+        break
+    }
+    if ($cloneStatus -in @('Failed', 'Error', 'Canceled')) {
+        throw "Repository indexing failed with cloneStatus '$cloneStatus'."
+    }
+    Start-Sleep -Seconds 10
+} while ((Get-Date) -lt $repoDeadline)
+if ($cloneStatus -ne 'Ready') {
+    throw "Repository cloneStatus did not reach Ready within ten minutes. Last status: '$cloneStatus'."
 }
-Write-Host "Repository validated independently: $RepositoryUrl branch=main cloneStatus=$cloneStatus"
 
 foreach ($connectorName in @('log-analytics', 'application-insights')) {
     $connector = az rest `
         --method get `
-        --url "https://management.azure.com${agentResourceId}/connectors/${connectorName}?api-version=2025-05-01-preview" `
+        --url "${agentArmUrl}/connectors/${connectorName}?api-version=$previewApiVersion" `
         --output json | ConvertFrom-Json
-    if ($LASTEXITCODE -ne 0 -or $connector.properties.provisioningState -notin @('Succeeded', $null)) {
-        throw "ARM connector '$connectorName' is not validated. ProvisioningState: '$($connector.properties.provisioningState)'."
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to read ARM connector '$connectorName'."
     }
-    Write-Host "ARM connector validated independently: $connectorName"
+    if ($connector.properties.identity -ne $agent.properties.actionConfiguration.identity) {
+        throw "ARM connector '$connectorName' is not using the SRE UAMI."
+    }
+    if ($connector.properties.provisioningState -notin @('Succeeded', $null)) {
+        throw "ARM connector '$connectorName' provisioning state is '$($connector.properties.provisioningState)'."
+    }
 }
 
 $codeAnalyzer = @{
@@ -94,7 +227,7 @@ $codeAnalyzer = @{
     owner = ''
     properties = @{
         instructions = @'
-Investigate only the fictional Grifols Plasma Supply demo. Correlate Azure Container Apps 5xx telemetry with structured logs by correlation ID, requisition ID, distribution center, error code, and RootCauseClue. Inspect the connected public repository main branch and cite file:line evidence. Treat all data as synthetic. In Review mode, propose the reversible mitigation of setting DEMO_COLD_CHAIN_FAILURE_RATE to 0; never execute a write without explicit approval.
+Investigate only the fictional Grifols Plasma Supply demo. Correlate Azure Container Apps 5xx telemetry with structured logs by correlation ID, requisition ID, distribution center, error code, and RootCauseClue. Inspect the connected main branch and cite file:line evidence. Treat all data as synthetic. In Review mode, propose the reversible mitigation of setting DEMO_COLD_CHAIN_FAILURE_RATE to 0; never execute a write without explicit approval.
 '@
         handoffDescription = 'Correlate Azure Monitor telemetry and repository source for the fictional cold-chain 5xx demo.'
         handoffs = @()
@@ -111,7 +244,6 @@ Investigate only the fictional Grifols Plasma Supply demo. Correlate Azure Conta
     }
 }
 Invoke-AgentApi -Method Put -Path '/api/v2/extendedAgent/agents/code-analyzer' -Body $codeAnalyzer | Out-Null
-Write-Host 'Data plane validated: code-analyzer subagent configured.'
 
 $incidentFilter = @{
     name = 'grifols-cold-chain-sev2'
@@ -129,32 +261,97 @@ $incidentFilter = @{
     }
 }
 Invoke-AgentApi -Method Put -Path '/api/v2/extendedAgent/incidentFilters/grifols-cold-chain-sev2' -Body $incidentFilter | Out-Null
-Write-Host 'Data plane validated: Sev2 Review response plan configured.'
 
-$httpTrigger = @{
-    name = 'grifols-controlled-issue'
-    description = 'Investigate a controlled incident-labeled GitHub issue for the synthetic demo.'
-    prompt = 'Analyze this controlled synthetic incident using Azure Monitor telemetry and the connected repository. Return evidence and a Review-mode mitigation proposal.'
-    handlingAgent = 'code-analyzer'
-    agentMode = 'review'
+$triggerPayload = @{
+    name = $triggerName
+    description = 'Investigate a controlled synthetic incident from GitHub.'
+    agentPrompt = 'Analyze the supplied synthetic incident using Azure Monitor telemetry and the connected repository. Return evidence and a Review-mode mitigation proposal.'
+    agent = 'code-analyzer'
+    mode = 'Review'
 }
-$trigger = Invoke-AgentApi -Method Post -Path '/api/v1/httptriggers/create' -Body $httpTrigger
-if ([string]::IsNullOrWhiteSpace($trigger.triggerUrl)) {
-    throw 'HTTP trigger creation did not return triggerUrl.'
-}
-Write-Host "HTTP trigger created. Store this value as GitHub Actions secret SRE_TRIGGER_URL: $($trigger.triggerUrl)"
+$triggerListResponse = Invoke-AgentApi -Method Get -Path '/api/v1/httptriggers' -Body $null
+$triggers = Get-ResponseItems -Response $triggerListResponse -PropertyNames @('value', 'triggers', 'items')
+$existingTrigger = $triggers | Where-Object {
+    ($_.name ?? $_.properties.name) -eq $triggerName
+} | Select-Object -First 1
 
-if ($EnableGitHubWrite) {
-    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_PAT)) {
-        Invoke-AgentApi -Method Put -Path '/api/v2/github/domains/github_com' -Body @{
-            AuthType = 'Pat'
-            Pat = $env:GITHUB_PAT
-        } | Out-Null
-        Write-Host 'GitHub write authentication configured from process environment; PAT was not persisted by this script.'
-    } else {
-        $oauth = Invoke-AgentApi -Method Get -Path '/api/v2/github/oauth/config' -Body $null
-        Write-Host 'MANUAL OAUTH CHECKPOINT: open the following URL only if GitHub write operations are required:'
-        Write-Host $oauth.oAuthUrl
-        Write-Host 'Public repository read and incident investigation do not require this write boundary.'
+if ($null -ne $existingTrigger) {
+    $triggerId = $existingTrigger.id ?? $existingTrigger.triggerId ?? $existingTrigger.properties.id
+    if ([string]::IsNullOrWhiteSpace($triggerId)) {
+        throw 'Existing HTTP trigger did not expose an ID.'
     }
+    $triggerPayload['id'] = $triggerId
+    $trigger = Invoke-AgentApi -Method Put -Path "/api/v1/httptriggers/$triggerId" -Body $triggerPayload
+} else {
+    $trigger = Invoke-AgentApi -Method Post -Path '/api/v1/httptriggers/create' -Body $triggerPayload
+    $triggerId = $trigger.id ?? $trigger.triggerId ?? $trigger.properties.id
 }
+if ([string]::IsNullOrWhiteSpace($triggerId)) {
+    throw 'HTTP trigger configuration did not return an ID.'
+}
+
+$triggerUrl = $trigger.triggerUrl `
+    ?? $trigger.webhookUrl `
+    ?? $existingTrigger.triggerUrl `
+    ?? $existingTrigger.webhookUrl `
+    ?? "$endpoint/api/v1/httptriggers/trigger/$triggerId"
+
+if ($SetGitHubSecret) {
+    $triggerUrl | gh secret set SRE_TRIGGER_URL --repo $GitHubRepository
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Unable to set GitHub secret SRE_TRIGGER_URL.'
+    }
+    Write-Host "GitHub secret SRE_TRIGGER_URL set for $GitHubRepository without printing the URL."
+} else {
+    Write-Host 'MANUAL ACTION: set the only workflow secret with the public webhook URL below:'
+    Write-Host "gh secret set SRE_TRIGGER_URL --repo $GitHubRepository"
+    Write-Host "Trigger URL: $triggerUrl"
+    Write-Host 'Alternatively rerun with -SetGitHubSecret to pipe it securely.'
+}
+
+$verifiedAgent = az rest `
+    --method get `
+    --url "${agentArmUrl}?api-version=$previewApiVersion" `
+    --output json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) {
+    throw 'Unable to verify final agent ARM configuration.'
+}
+if ($verifiedAgent.properties.incidentManagementConfiguration.type -ne 'AzMonitor') {
+    throw 'Agent incidentManagementConfiguration is not AzMonitor.'
+}
+if ($verifiedAgent.properties.actionConfiguration.mode -ne 'Review' -or
+    $verifiedAgent.properties.actionConfiguration.accessLevel -ne 'Low') {
+    throw 'Agent must remain Review/Low.'
+}
+if ([int]$verifiedAgent.properties.monthlyAgentUnitLimit -ne $MonthlyAgentUnitLimit) {
+    throw "monthlyAgentUnitLimit verification failed. Expected $MonthlyAgentUnitLimit."
+}
+
+$verifiedRepo = Invoke-AgentApi -Method Get -Path "/api/v2/repos/$RepositoryName" -Body $null
+if (($verifiedRepo.properties.cloneStatus ?? $verifiedRepo.cloneStatus) -ne 'Ready') {
+    throw 'Repository is not Ready after configuration.'
+}
+$verifiedSubagent = Invoke-AgentApi -Method Get -Path '/api/v2/extendedAgent/agents/code-analyzer' -Body $null
+$verifiedFilter = Invoke-AgentApi -Method Get -Path '/api/v2/extendedAgent/incidentFilters/grifols-cold-chain-sev2' -Body $null
+$verifiedTriggersResponse = Invoke-AgentApi -Method Get -Path '/api/v1/httptriggers' -Body $null
+$verifiedTriggers = Get-ResponseItems -Response $verifiedTriggersResponse -PropertyNames @('value', 'triggers', 'items')
+$verifiedTrigger = $verifiedTriggers | Where-Object {
+    ($_.id ?? $_.triggerId ?? $_.properties.id) -eq $triggerId
+} | Select-Object -First 1
+if ($null -eq $verifiedSubagent -or $null -eq $verifiedFilter -or $null -eq $verifiedTrigger) {
+    throw 'Subagent, response plan, or HTTP trigger verification failed.'
+}
+$verifiedFilterMode = $verifiedFilter.properties.agentMode ?? $verifiedFilter.agentMode
+if ($verifiedFilterMode -ne 'Review') {
+    throw "Incident filter must remain in Review mode. Reported: '$verifiedFilterMode'."
+}
+$verifiedTriggerMode = $verifiedTrigger.mode ?? $verifiedTrigger.properties.mode
+$verifiedTriggerAgent = $verifiedTrigger.agent ?? $verifiedTrigger.properties.agent
+$verifiedTriggerPrompt = $verifiedTrigger.agentPrompt ?? $verifiedTrigger.properties.agentPrompt
+if ($verifiedTriggerMode -ne 'Review' -or
+    $verifiedTriggerAgent -ne 'code-analyzer' -or
+    [string]::IsNullOrWhiteSpace($verifiedTriggerPrompt)) {
+    throw 'HTTP trigger did not preserve mode=Review, agent=code-analyzer, and agentPrompt.'
+}
+
+Write-Host "SRE Agent configuration verified: repo=Ready, connectors=UAMI, incident=AzMonitor, mode=Review, access=Low, monthlyLimit=$MonthlyAgentUnitLimit."
