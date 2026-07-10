@@ -7,7 +7,9 @@ import {
   TherapySupply,
 } from '../types';
 
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:5291/api';
+const API_BASE_URL = process.env.NODE_ENV === 'development'
+  ? process.env.REACT_APP_API_BASE_URL || 'http://localhost:5291/api'
+  : '/api';
 
 export class ApiError<T = unknown> extends Error {
   constructor(

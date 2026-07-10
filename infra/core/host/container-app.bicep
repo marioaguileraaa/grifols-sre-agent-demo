@@ -7,6 +7,7 @@ param managedIdentityId string
 param containerName string
 param containerImage string
 param targetPort int
+param probePath string
 param env array = []
 param cpu string = '0.5'
 param memory string = '1.0Gi'
@@ -45,6 +46,43 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: containerName
           image: containerImage
           env: env
+          probes: [
+            {
+              type: 'Startup'
+              httpGet: {
+                path: probePath
+                port: targetPort
+                scheme: 'HTTP'
+              }
+              initialDelaySeconds: 1
+              periodSeconds: 5
+              timeoutSeconds: 3
+              failureThreshold: 30
+            }
+            {
+              type: 'Readiness'
+              httpGet: {
+                path: probePath
+                port: targetPort
+                scheme: 'HTTP'
+              }
+              periodSeconds: 5
+              timeoutSeconds: 3
+              failureThreshold: 6
+            }
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: probePath
+                port: targetPort
+                scheme: 'HTTP'
+              }
+              initialDelaySeconds: 10
+              periodSeconds: 10
+              timeoutSeconds: 3
+              failureThreshold: 3
+            }
+          ]
           resources: {
             cpu: json(cpu)
             memory: memory

@@ -4,7 +4,7 @@ param(
     [string] $Repository = 'marioaguileraaa/grifols-sre-agent-demo'
 )
 
-$title = '[SRE demo] Cold-chain dispatch reservation returns 503'
+$title = '[SYNTHETIC] Cold-chain dispatch reservation returns 503'
 $body = @'
 ## Synthetic incident
 
@@ -18,13 +18,16 @@ The fictional Grifols Plasma Supply demo is returning `COLD_CHAIN_GATEWAY_UNAVAI
 '@
 
 if ($PSCmdlet.ShouldProcess($Repository, 'Create controlled incident issue')) {
-    gh issue create `
+    $issueUrl = gh issue create `
         --repo $Repository `
         --title $title `
-        --body $body `
-        --label incident `
-        --label sre-agent-demo
+        --body $body
     if ($LASTEXITCODE -ne 0) {
         throw 'Unable to create the sample incident issue.'
+    }
+
+    gh issue edit $issueUrl --add-label sre-investigate
+    if ($LASTEXITCODE -ne 0) {
+        throw "Issue '$issueUrl' was created, but the sre-investigate label could not be added."
     }
 }

@@ -9,6 +9,22 @@
 - Error esperado: HTTP `503`, `COLD_CHAIN_GATEWAY_UNAVAILABLE`.
 - Alerta: `alert-grifols-backend-5xx`, severidad 2, más de cinco `Requests` con `statusCodeCategory=5xx` en cinco minutos, evaluación cada minuto.
 - Cambio reversible: `DEMO_COLD_CHAIN_FAILURE_RATE` de `100` a `0`.
+- SRE Agent: `incidentManagementConfiguration.type=AzMonitor`, `actionConfiguration.mode=Review`, `accessLevel=Low`, límite mensual `1000`.
+
+## Preparación del entorno y trigger
+
+El despliegue de `scripts/deploy.ps1` es idempotente y de dos pasadas: Bicep con placeholder (`:80`, probes `/`), builds remotos ACR, y la misma plantilla con imágenes finales. La segunda pasada converge API (`:8080`, probes `/healthz`), frontend (`:80`, probes `/`) y `BACKEND_URL=https://<backend-fqdn>`. Después exige revisiones `Healthy/Running`, rate `0`, despacho/tracking sano, frontend `/` y proxy same-origin `/api/healthz`.
+
+Solo `id-grifols-app-v1` descarga imágenes con `AcrPull`. Los conectores ARM de Log Analytics y Application Insights usan el resource ID de `id-grifols-sre-v1`, que mantiene únicamente los roles documentados y `SRE Agent Administrator` sobre el recurso del agente.
+
+Antes de conectar el repositorio, Azure SRE Agent exige OAuth o PAT aunque el código sea público. Usar `GITHUB_PAT` solo en el entorno del proceso, o completar la URL OAuth que imprime el script. Sin dominio/PAT, el script termina como **INCOMPLETE** y debe repetirse. El script hace `PUT` del repositorio, espera `cloneStatus=Ready`/éxito, verifica subagente y filtro, y actualiza por ID o crea el HTTP trigger con `agentPrompt`, `agent=code-analyzer` y `agentMode=Review`.
+
+```powershell
+az login --scope "https://azuresre.dev/.default"
+.\scripts\configure-sre-agent.ps1 -SetGitHubSecret
+```
+
+El workflow solo utiliza `SRE_TRIGGER_URL`. Los issues deben tener la etiqueta exacta `sre-investigate` y título con prefijo `[SYNTHETIC]`; `workflow_dispatch` acepta únicamente un `incident-id` `SYNTHETIC-...`. El endpoint `/api/v1/httptriggers/trigger/{id}` es público/no-auth; el workflow construye JSON con `jq -n --arg` y valida HTTP `202`, `success=true` y `threadId`.
 
 ## 1. Confirmar Azure Monitor
 
@@ -99,7 +115,7 @@ Confirmar:
 
 ## 4. Correlacionar con repositorio
 
-En la rama pública `main`, revisar:
+En la rama conectada y autenticada `main`, revisar:
 
 - `GrifolsSupply.Api/Options/ColdChainDemoOptions.cs`: validación 0–100;
 - `GrifolsSupply.Api/Services/ColdChainDispatchService.cs`: fallo determinista, código estable, pista y logs;
@@ -158,6 +174,8 @@ ContainerAppConsoleLogs_CL
 ```
 
 Confirmar una reserva correcta después de la nueva revisión y ausencia de nuevos 503. La alerta puede tardar una ventana en resolver.
+
+La recuperación no cambia imágenes, RBAC, conectores ni secretos: solo restaura `DEMO_COLD_CHAIN_FAILURE_RATE=0`, espera `Healthy/Running` y verifica un nuevo shipment/tracking con correlation ID.
 
 ## Plantilla de informe de incidente
 

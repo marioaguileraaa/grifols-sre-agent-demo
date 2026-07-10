@@ -19,7 +19,7 @@ test('returns shipment data from a healthy dispatch reservation', async () => {
 
   expect(shipment.trackingId).toBe('GPS-20260710-TEST');
   expect(global.fetch).toHaveBeenCalledWith(
-    expect.stringContaining('/cold-chain-dispatch'),
+    '/api/cold-chain-dispatch',
     expect.objectContaining({ method: 'POST' }),
   );
 });
@@ -44,4 +44,19 @@ test('preserves stable failure code and correlation id for the UI', async () => 
       expect(error.details.correlationId).toBe('corr-demo-503');
     }
   }
+});
+
+test('uses the same-origin API path for shipment tracking', async () => {
+  global.fetch = jest.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({ trackingId: 'GPS-20260710-TRACK' }),
+  } as Response);
+
+  await coldChainDispatchService.getByTrackingId('GPS-20260710-TRACK');
+
+  expect(global.fetch).toHaveBeenCalledWith(
+    '/api/cold-chain-dispatch/GPS-20260710-TRACK',
+    expect.objectContaining({ headers: expect.any(Object) }),
+  );
 });

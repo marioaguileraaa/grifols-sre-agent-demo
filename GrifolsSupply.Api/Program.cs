@@ -25,21 +25,16 @@ builder.Services
 builder.Services.AddSingleton<Microsoft.Extensions.Options.IValidateOptions<ColdChainDemoOptions>, ColdChainDemoOptionsValidator>();
 builder.Services.AddSingleton<ColdChainDispatchService>();
 
-var configuredOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>() ?? [];
-var allowedOrigins = configuredOrigins
-    .Append("http://localhost:3000")
-    .Append("https://localhost:3000")
-    .Where(origin => !string.IsNullOrWhiteSpace(origin))
-    .Distinct(StringComparer.OrdinalIgnoreCase)
-    .ToArray();
-
-builder.Services.AddCors(options =>
+if (builder.Environment.IsDevelopment())
 {
-    options.AddPolicy("Frontend", policy =>
-        policy.WithOrigins(allowedOrigins)
-            .AllowAnyHeader()
-            .AllowAnyMethod());
-});
+    builder.Services.AddCors(options =>
+    {
+        options.AddPolicy("LocalFrontend", policy =>
+            policy.WithOrigins("http://localhost:3000", "https://localhost:3000")
+                .AllowAnyHeader()
+                .AllowAnyMethod());
+    });
+}
 
 var app = builder.Build();
 
@@ -47,12 +42,13 @@ app.UseForwardedHeaders();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.UseCors("LocalFrontend");
 }
 
-app.UseCors("Frontend");
 app.UseAuthorization();
 app.MapControllers();
 app.MapGet("/healthz", () => Results.Ok(new { status = "healthy", service = "grifols-plasma-supply-api" }));
+app.MapGet("/api/healthz", () => Results.Ok(new { status = "healthy", service = "grifols-plasma-supply-api" }));
 
 app.Run();
 
