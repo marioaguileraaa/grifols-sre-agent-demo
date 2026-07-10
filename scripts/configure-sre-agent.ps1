@@ -101,6 +101,24 @@ function Get-ResponseItems {
     return @($Response)
 }
 
+function Get-OptionalPropertyValue {
+    param(
+        [AllowNull()]
+        [object] $InputObject,
+        [Parameter(Mandatory)]
+        [string] $PropertyName
+    )
+
+    if ($null -eq $InputObject) {
+        return $null
+    }
+    $property = $InputObject.PSObject.Properties[$PropertyName]
+    if ($null -eq $property) {
+        return $null
+    }
+    return $property.Value
+}
+
 function Invoke-AgentApi {
     param(
         [Parameter(Mandatory)]
@@ -154,12 +172,21 @@ if ($null -ne $lastDataPlaneError) {
 $domainsResponse = Invoke-AgentApi -Method Get -Path '/api/v2/github/domains' -Body $null
 $domains = Get-ResponseItems -Response $domainsResponse -PropertyNames @('value', 'values', 'domains', 'items')
 $githubDomain = $domains | Where-Object {
-    ($_.name ?? $_.domain ?? $_.properties.domain) -in @('github_com', 'github.com')
+    $domainProperties = Get-OptionalPropertyValue -InputObject $_ -PropertyName 'properties'
+    $domainName = @(
+        Get-OptionalPropertyValue -InputObject $_ -PropertyName 'name'
+        Get-OptionalPropertyValue -InputObject $_ -PropertyName 'domain'
+        Get-OptionalPropertyValue -InputObject $domainProperties -PropertyName 'domain'
+    ) | Where-Object { $null -ne $_ } | Select-Object -First 1
+    $domainName -in @('github_com', 'github.com')
 } | Select-Object -First 1
-$githubDomainStatus = $githubDomain.properties.status `
-    ?? $githubDomain.properties.connectionStatus `
-    ?? $githubDomain.status `
-    ?? $githubDomain.connectionStatus
+$githubDomainProperties = Get-OptionalPropertyValue -InputObject $githubDomain -PropertyName 'properties'
+$githubDomainStatus = @(
+    Get-OptionalPropertyValue -InputObject $githubDomainProperties -PropertyName 'status'
+    Get-OptionalPropertyValue -InputObject $githubDomainProperties -PropertyName 'connectionStatus'
+    Get-OptionalPropertyValue -InputObject $githubDomain -PropertyName 'status'
+    Get-OptionalPropertyValue -InputObject $githubDomain -PropertyName 'connectionStatus'
+) | Where-Object { $null -ne $_ } | Select-Object -First 1
 $domainReady = $null -ne $githubDomain -and $githubDomainStatus -in @('Connected', 'Ready', 'Authenticated', 'Succeeded')
 
 if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_PAT)) {
