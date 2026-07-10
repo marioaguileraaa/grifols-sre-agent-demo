@@ -1,0 +1,8 @@
+@GrifolsPlasmaSupplyApi_HostAddress = http://localhost:5291
+
+GET {{GrifolsPlasmaSupplyApi_HostAddress}}/api/distribution-centers
+Accept: application/json
+
+###
+
+GET {{GrifolsPlasmaSupplyApi_HostAddress}}/health

@@ -1,6 +1,0 @@
-@GrubifyApi_HostAddress = http://localhost:5291
-
-GET {{GrubifyApi_HostAddress}}/weatherforecast/
-Accept: application/json
-
-###

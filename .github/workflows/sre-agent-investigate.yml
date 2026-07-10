@@ -1,0 +1,57 @@
+name: Synthetic SRE Agent investigation
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      synthetic_incident:
+        description: Confirm this is the synthetic cold-chain demo incident
+        type: boolean
+        required: true
+        default: false
+      incident_id:
+        description: Synthetic incident identifier (must start with SYNTH-)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  trigger-investigation:
+    if: >-
+      (github.event_name == 'issues' &&
+       github.event.label.name == 'sre-investigate' &&
+       startsWith(github.event.issue.title, '[SYNTHETIC]')) ||
+      (github.event_name == 'workflow_dispatch' &&
+       inputs.synthetic_incident == true &&
+       startsWith(inputs.incident_id, 'SYNTH-'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build safe request and trigger agent
+        env:
+          TRIGGER_URL: ${{ secrets.SRE_TRIGGER_URL }}
+          INCIDENT_ID: ${{ github.event_name == 'issues' && format('SYNTH-ISSUE-{0}', github.event.issue.number) || inputs.incident_id }}
+          ISSUE_TITLE: ${{ github.event.issue.title || '' }}
+          ISSUE_URL: ${{ github.event.issue.html_url || '' }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${TRIGGER_URL}"
+          payload="$(jq -n \
+            --arg incidentId "${INCIDENT_ID}" \
+            --arg source "github-workflow" \
+            --arg scenario "cold-chain-reservation-5xx" \
+            --arg issueTitle "${ISSUE_TITLE}" \
+            --arg issueUrl "${ISSUE_URL}" \
+            --arg repository "${REPOSITORY}" \
+            '{incidentId: $incidentId, source: $source, scenario: $scenario,
+              issueTitle: $issueTitle, issueUrl: $issueUrl, repository: $repository,
+              synthetic: true}')"
+          curl --fail-with-body --silent --show-error \
+            --retry 3 --retry-all-errors \
+            --header 'Content-Type: application/json' \
+            --data "${payload}" \
+            "${TRIGGER_URL}" >/dev/null

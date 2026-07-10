@@ -1,0 +1,10 @@
+{
+  "name": "github-grifols-demo",
+  "type": "GitHub",
+  "description": "Public demonstration repository connector",
+  "configuration": {
+    "authentication": "OAuth",
+    "manualOAuthConsentRequired": true,
+    "credentials": null
+  }
+}

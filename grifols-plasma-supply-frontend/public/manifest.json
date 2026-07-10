@@ -1,0 +1,9 @@
+{
+  "short_name": "Plasma Supply",
+  "name": "Grifols Plasma Supply",
+  "icons": [],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#005EB8",
+  "background_color": "#F4FAFC"
+}

@@ -1,0 +1,10 @@
+{
+  "name": "log-analytics-grifols-demo",
+  "type": "LogAnalytics",
+  "description": "Synthetic cold-chain Container Apps logs",
+  "configuration": {
+    "workspaceResourceId": "${LOG_ANALYTICS_WORKSPACE_ID}",
+    "authentication": "ManagedIdentity",
+    "queryTable": "ContainerAppConsoleLogs_CL"
+  }
+}

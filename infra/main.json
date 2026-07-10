@@ -1,0 +1,714 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.42.1.51946",
+      "templateHash": "14252675178177182473"
+    }
+  },
+  "parameters": {
+    "resourceGroupName": {
+      "type": "string",
+      "defaultValue": "rg-demo-sre-agent-v1",
+      "metadata": {
+        "description": "Existing guarded resource group. The template never creates or deletes it."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "eastus2",
+      "metadata": {
+        "description": "Azure region for all regional resources."
+      }
+    },
+    "backendImage": {
+      "type": "string",
+      "defaultValue": "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest",
+      "metadata": {
+        "description": "Optional immutable backend image. The public placeholder is used before remote builds."
+      }
+    },
+    "frontendImage": {
+      "type": "string",
+      "defaultValue": "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest",
+      "metadata": {
+        "description": "Optional immutable frontend image. The public placeholder is used before remote builds."
+      }
+    }
+  },
+  "variables": {
+    "monitoringContributorRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '749f88d5-cbae-40b8-bcfc-e573ddc772fa')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(subscription().id, subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName')), 'id-grifols-sre-v1', variables('monitoringContributorRoleId'))]",
+      "properties": {
+        "roleDefinitionId": "[variables('monitoringContributorRoleId')]",
+        "principalId": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.sreIdentityPrincipalId.value]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "grifols-plasma-supply-platform",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "backendImage": {
+            "value": "[parameters('backendImage')]"
+          },
+          "frontendImage": {
+            "value": "[parameters('frontendImage')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "1737990930227793860"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "backendImage": {
+              "type": "string"
+            },
+            "frontendImage": {
+              "type": "string"
+            }
+          },
+          "variables": {
+            "names": {
+              "workspace": "law-grifols-sre-v1",
+              "insights": "appi-grifols-sre-v1",
+              "registry": "[format('acrgps{0}', uniqueString(subscription().id, resourceGroup().name))]",
+              "environment": "cae-grifols-sre-v1",
+              "appPullIdentity": "id-grifols-app-pull-v1",
+              "backend": "ca-grifols-backend-v1",
+              "frontend": "ca-grifols-frontend-v1",
+              "sreIdentity": "id-grifols-sre-v1",
+              "sreAgent": "sre-agent-grifols-v1",
+              "actionGroup": "ag-grifols-sre-v1",
+              "metricAlert": "alert-grifols-cold-chain-5xx-v1"
+            },
+            "tags": {
+              "purpose": "sre-agent-demo",
+              "environment": "demo",
+              "dataClassification": "synthetic"
+            },
+            "helloWorldImage": "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest",
+            "acrPullRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
+            "readerRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'acdd72a7-3385-48ef-bd42-f606fba81ae7')]",
+            "logAnalyticsReaderRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '73c42c96-874c-492b-b04d-ab87d138a893')]",
+            "monitoringReaderRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '43d0d8ad-25c7-4714-9337-8ba259a9fe05')]",
+            "containerAppsContributorRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '358470bc-b56b-4d8f-8396-3db7d1314c5b')]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.OperationalInsights/workspaces",
+              "apiVersion": "2023-09-01",
+              "name": "[variables('names').workspace]",
+              "location": "[parameters('location')]",
+              "tags": "[variables('tags')]",
+              "properties": {
+                "retentionInDays": 30,
+                "features": {
+                  "enableLogAccessUsingOnlyResourcePermissions": true
+                },
+                "publicNetworkAccessForIngestion": "Enabled",
+                "publicNetworkAccessForQuery": "Enabled",
+                "sku": {
+                  "name": "PerGB2018"
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Insights/components",
+              "apiVersion": "2020-02-02",
+              "name": "[variables('names').insights]",
+              "location": "[parameters('location')]",
+              "kind": "web",
+              "tags": "[variables('tags')]",
+              "properties": {
+                "Application_Type": "web",
+                "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('names').workspace)]",
+                "IngestionMode": "LogAnalytics",
+                "publicNetworkAccessForIngestion": "Enabled",
+                "publicNetworkAccessForQuery": "Enabled"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces', variables('names').workspace)]"
+              ]
+            },
+            {
+              "type": "Microsoft.ContainerRegistry/registries",
+              "apiVersion": "2023-07-01",
+              "name": "[variables('names').registry]",
+              "location": "[parameters('location')]",
+              "tags": "[variables('tags')]",
+              "sku": {
+                "name": "Basic"
+              },
+              "properties": {
+                "adminUserEnabled": false,
+                "anonymousPullEnabled": false,
+                "publicNetworkAccess": "Enabled"
+              }
+            },
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2023-01-31",
+              "name": "[variables('names').appPullIdentity]",
+              "location": "[parameters('location')]",
+              "tags": "[variables('tags')]"
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.ContainerRegistry/registries', variables('names').registry)]",
+              "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', variables('names').registry), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').appPullIdentity), variables('acrPullRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[variables('acrPullRoleId')]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').appPullIdentity), '2023-01-31').principalId]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').appPullIdentity)]",
+                "[resourceId('Microsoft.ContainerRegistry/registries', variables('names').registry)]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/managedEnvironments",
+              "apiVersion": "2024-03-01",
+              "name": "[variables('names').environment]",
+              "location": "[parameters('location')]",
+              "tags": "[variables('tags')]",
+              "properties": {
+                "appLogsConfiguration": {
+                  "destination": "log-analytics",
+                  "logAnalyticsConfiguration": {
+                    "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('names').workspace), '2023-09-01').customerId]",
+                    "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', variables('names').workspace), '2023-09-01').primarySharedKey]"
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces', variables('names').workspace)]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2024-03-01",
+              "name": "[variables('names').backend]",
+              "location": "[parameters('location')]",
+              "tags": "[union(variables('tags'), createObject('azd-service-name', 'backend'))]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').appPullIdentity))]": {}
+                }
+              },
+              "properties": {
+                "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('names').environment)]",
+                "configuration": {
+                  "activeRevisionsMode": "Single",
+                  "ingress": {
+                    "external": true,
+                    "targetPort": 8080,
+                    "transport": "auto",
+                    "allowInsecure": false
+                  },
+                  "registries": "[if(equals(parameters('backendImage'), variables('helloWorldImage')), createArray(), createArray(createObject('server', reference(resourceId('Microsoft.ContainerRegistry/registries', variables('names').registry), '2023-07-01').loginServer, 'identity', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').appPullIdentity))))]"
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "backend",
+                      "image": "[parameters('backendImage')]",
+                      "env": [
+                        {
+                          "name": "ASPNETCORE_ENVIRONMENT",
+                          "value": "Production"
+                        },
+                        {
+                          "name": "DEMO_COLD_CHAIN_FAILURE_RATE",
+                          "value": "0"
+                        },
+                        {
+                          "name": "AllowedOrigins__0",
+                          "value": "[format('https://{0}.{1}', variables('names').frontend, reference(resourceId('Microsoft.App/managedEnvironments', variables('names').environment), '2024-03-01').defaultDomain)]"
+                        }
+                      ],
+                      "resources": {
+                        "cpu": "[json('0.5')]",
+                        "memory": "1Gi"
+                      },
+                      "probes": "[if(equals(parameters('backendImage'), variables('helloWorldImage')), createArray(), createArray(createObject('type', 'Liveness', 'httpGet', createObject('path', '/health', 'port', 8080, 'scheme', 'HTTP'), 'initialDelaySeconds', 15, 'periodSeconds', 15), createObject('type', 'Readiness', 'httpGet', createObject('path', '/health', 'port', 8080, 'scheme', 'HTTP'), 'initialDelaySeconds', 5, 'periodSeconds', 10)))]"
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 1
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').appPullIdentity)]",
+                "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', variables('names').registry), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerRegistry/registries', variables('names').registry), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').appPullIdentity), variables('acrPullRoleId')))]",
+                "[resourceId('Microsoft.App/managedEnvironments', variables('names').environment)]",
+                "[resourceId('Microsoft.ContainerRegistry/registries', variables('names').registry)]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2024-03-01",
+              "name": "[variables('names').frontend]",
+              "location": "[parameters('location')]",
+              "tags": "[union(variables('tags'), createObject('azd-service-name', 'frontend'))]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').appPullIdentity))]": {}
+                }
+              },
+              "properties": {
+                "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('names').environment)]",
+                "configuration": {
+                  "activeRevisionsMode": "Single",
+                  "ingress": {
+                    "external": true,
+                    "targetPort": 80,
+                    "transport": "auto",
+                    "allowInsecure": false
+                  },
+                  "registries": "[if(equals(parameters('frontendImage'), variables('helloWorldImage')), createArray(), createArray(createObject('server', reference(resourceId('Microsoft.ContainerRegistry/registries', variables('names').registry), '2023-07-01').loginServer, 'identity', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').appPullIdentity))))]"
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "frontend",
+                      "image": "[parameters('frontendImage')]",
+                      "env": [
+                        {
+                          "name": "BACKEND_URL",
+                          "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', variables('names').backend), '2024-03-01').configuration.ingress.fqdn)]"
+                        }
+                      ],
+                      "resources": {
+                        "cpu": "[json('0.25')]",
+                        "memory": "0.5Gi"
+                      },
+                      "probes": "[if(equals(parameters('frontendImage'), variables('helloWorldImage')), createArray(), createArray(createObject('type', 'Readiness', 'httpGet', createObject('path', '/health', 'port', 80, 'scheme', 'HTTP'), 'initialDelaySeconds', 5, 'periodSeconds', 10)))]"
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 3
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').appPullIdentity)]",
+                "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', variables('names').registry), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerRegistry/registries', variables('names').registry), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').appPullIdentity), variables('acrPullRoleId')))]",
+                "[resourceId('Microsoft.App/containerApps', variables('names').backend)]",
+                "[resourceId('Microsoft.App/managedEnvironments', variables('names').environment)]",
+                "[resourceId('Microsoft.ContainerRegistry/registries', variables('names').registry)]"
+              ]
+            },
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2023-01-31",
+              "name": "[variables('names').sreIdentity]",
+              "location": "[parameters('location')]",
+              "tags": "[variables('tags')]"
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity), variables('readerRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[variables('readerRoleId')]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity), '2023-01-31').principalId]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity)]"
+              ]
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity), variables('logAnalyticsReaderRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[variables('logAnalyticsReaderRoleId')]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity), '2023-01-31').principalId]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity)]"
+              ]
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity), variables('monitoringReaderRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[variables('monitoringReaderRoleId')]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity), '2023-01-31').principalId]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity)]"
+              ]
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity), variables('containerAppsContributorRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[variables('containerAppsContributorRoleId')]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity), '2023-01-31').principalId]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity)]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/agents",
+              "apiVersion": "2026-01-01",
+              "name": "[variables('names').sreAgent]",
+              "location": "[parameters('location')]",
+              "tags": "[variables('tags')]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity))]": {}
+                }
+              },
+              "properties": {
+                "actionConfiguration": {
+                  "accessLevel": "Low",
+                  "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity)]",
+                  "mode": "Review"
+                },
+                "knowledgeGraphConfiguration": {
+                  "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity)]",
+                  "managedResources": [
+                    "[resourceGroup().id]"
+                  ]
+                },
+                "logConfiguration": {
+                  "applicationInsightsConfiguration": {
+                    "appId": "[reference(resourceId('Microsoft.Insights/components', variables('names').insights), '2020-02-02').AppId]"
+                  }
+                },
+                "upgradeChannel": "Stable"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Insights/components', variables('names').insights)]",
+                "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity), variables('containerAppsContributorRoleId')))]",
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity)]",
+                "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity), variables('logAnalyticsReaderRoleId')))]",
+                "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity), variables('monitoringReaderRoleId')))]",
+                "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity), variables('readerRoleId')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Insights/actionGroups",
+              "apiVersion": "2023-01-01",
+              "name": "[variables('names').actionGroup]",
+              "location": "global",
+              "tags": "[variables('tags')]",
+              "properties": {
+                "groupShortName": "gps5xx",
+                "enabled": true
+              }
+            },
+            {
+              "type": "Microsoft.Insights/metricAlerts",
+              "apiVersion": "2018-03-01",
+              "name": "[variables('names').metricAlert]",
+              "location": "global",
+              "tags": "[variables('tags')]",
+              "properties": {
+                "description": "Synthetic cold-chain dispatch reservation 5xx threshold reached.",
+                "severity": 2,
+                "enabled": true,
+                "scopes": [
+                  "[resourceId('Microsoft.App/containerApps', variables('names').backend)]"
+                ],
+                "evaluationFrequency": "PT1M",
+                "windowSize": "PT5M",
+                "targetResourceType": "Microsoft.App/containerApps",
+                "targetResourceRegion": "[parameters('location')]",
+                "criteria": {
+                  "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+                  "allOf": [
+                    {
+                      "name": "Backend5xxRequests",
+                      "criterionType": "StaticThresholdCriterion",
+                      "metricNamespace": "Microsoft.App/containerApps",
+                      "metricName": "Requests",
+                      "operator": "GreaterThanOrEqual",
+                      "threshold": 8,
+                      "timeAggregation": "Total",
+                      "dimensions": [
+                        {
+                          "name": "statusCodeCategory",
+                          "operator": "Include",
+                          "values": [
+                            "5xx"
+                          ]
+                        }
+                      ],
+                      "skipMetricValidation": false
+                    }
+                  ]
+                },
+                "autoMitigate": true,
+                "actions": [
+                  {
+                    "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', variables('names').actionGroup)]"
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Insights/actionGroups', variables('names').actionGroup)]",
+                "[resourceId('Microsoft.App/containerApps', variables('names').backend)]"
+              ]
+            }
+          ],
+          "outputs": {
+            "logAnalyticsWorkspaceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('names').workspace)]"
+            },
+            "logAnalyticsWorkspaceName": {
+              "type": "string",
+              "value": "[variables('names').workspace]"
+            },
+            "applicationInsightsId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Insights/components', variables('names').insights)]"
+            },
+            "applicationInsightsAppId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Insights/components', variables('names').insights), '2020-02-02').AppId]"
+            },
+            "containerRegistryId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.ContainerRegistry/registries', variables('names').registry)]"
+            },
+            "containerRegistryName": {
+              "type": "string",
+              "value": "[variables('names').registry]"
+            },
+            "containerRegistryLoginServer": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', variables('names').registry), '2023-07-01').loginServer]"
+            },
+            "containerAppsEnvironmentId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.App/managedEnvironments', variables('names').environment)]"
+            },
+            "containerAppsEnvironmentName": {
+              "type": "string",
+              "value": "[variables('names').environment]"
+            },
+            "appPullIdentityId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').appPullIdentity)]"
+            },
+            "backendContainerAppId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.App/containerApps', variables('names').backend)]"
+            },
+            "backendContainerAppName": {
+              "type": "string",
+              "value": "[variables('names').backend]"
+            },
+            "backendFqdn": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.App/containerApps', variables('names').backend), '2024-03-01').configuration.ingress.fqdn]"
+            },
+            "frontendContainerAppId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.App/containerApps', variables('names').frontend)]"
+            },
+            "frontendContainerAppName": {
+              "type": "string",
+              "value": "[variables('names').frontend]"
+            },
+            "frontendFqdn": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.App/containerApps', variables('names').frontend), '2024-03-01').configuration.ingress.fqdn]"
+            },
+            "sreIdentityId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity)]"
+            },
+            "sreIdentityPrincipalId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('names').sreIdentity), '2023-01-31').principalId]"
+            },
+            "sreAgentId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.App/agents', variables('names').sreAgent)]"
+            },
+            "sreAgentName": {
+              "type": "string",
+              "value": "[variables('names').sreAgent]"
+            },
+            "actionGroupId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Insights/actionGroups', variables('names').actionGroup)]"
+            },
+            "metricAlertId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Insights/metricAlerts', variables('names').metricAlert)]"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "AZURE_LOCATION": {
+      "type": "string",
+      "value": "[parameters('location')]"
+    },
+    "AZURE_TENANT_ID": {
+      "type": "string",
+      "value": "[tenant().tenantId]"
+    },
+    "AZURE_SUBSCRIPTION_ID": {
+      "type": "string",
+      "value": "[subscription().subscriptionId]"
+    },
+    "AZURE_RESOURCE_GROUP": {
+      "type": "string",
+      "value": "[parameters('resourceGroupName')]"
+    },
+    "RESOURCE_GROUP_ID": {
+      "type": "string",
+      "value": "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+    },
+    "LOG_ANALYTICS_WORKSPACE_ID": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.logAnalyticsWorkspaceId.value]"
+    },
+    "LOG_ANALYTICS_WORKSPACE_NAME": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.logAnalyticsWorkspaceName.value]"
+    },
+    "APPLICATION_INSIGHTS_ID": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.applicationInsightsId.value]"
+    },
+    "APPLICATION_INSIGHTS_APP_ID": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.applicationInsightsAppId.value]"
+    },
+    "AZURE_CONTAINER_REGISTRY_ID": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.containerRegistryId.value]"
+    },
+    "AZURE_CONTAINER_REGISTRY_NAME": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.containerRegistryName.value]"
+    },
+    "AZURE_CONTAINER_REGISTRY_ENDPOINT": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.containerRegistryLoginServer.value]"
+    },
+    "CONTAINER_APPS_ENVIRONMENT_ID": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.containerAppsEnvironmentId.value]"
+    },
+    "CONTAINER_APPS_ENVIRONMENT_NAME": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.containerAppsEnvironmentName.value]"
+    },
+    "APP_PULL_IDENTITY_ID": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.appPullIdentityId.value]"
+    },
+    "BACKEND_CONTAINER_APP_ID": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.backendContainerAppId.value]"
+    },
+    "BACKEND_CONTAINER_APP_NAME": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.backendContainerAppName.value]"
+    },
+    "BACKEND_FQDN": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.backendFqdn.value]"
+    },
+    "API_BASE_URL": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.backendFqdn.value)]"
+    },
+    "FRONTEND_CONTAINER_APP_ID": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.frontendContainerAppId.value]"
+    },
+    "FRONTEND_CONTAINER_APP_NAME": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.frontendContainerAppName.value]"
+    },
+    "FRONTEND_FQDN": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.frontendFqdn.value]"
+    },
+    "FRONTEND_URL": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.frontendFqdn.value)]"
+    },
+    "SRE_IDENTITY_ID": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.sreIdentityId.value]"
+    },
+    "SRE_IDENTITY_PRINCIPAL_ID": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.sreIdentityPrincipalId.value]"
+    },
+    "SRE_AGENT_ID": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.sreAgentId.value]"
+    },
+    "SRE_AGENT_NAME": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.sreAgentName.value]"
+    },
+    "ACTION_GROUP_ID": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.actionGroupId.value]"
+    },
+    "METRIC_ALERT_ID": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'grifols-plasma-supply-platform'), '2025-04-01').outputs.metricAlertId.value]"
+    }
+  }
+}

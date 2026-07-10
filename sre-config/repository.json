@@ -1,0 +1,7 @@
+{
+  "name": "grifols-sre-agent-demo",
+  "type": "PublicGitHubRepository",
+  "url": "https://github.com/marioaguileraaa/grifols-sre-agent-demo",
+  "defaultBranch": "main",
+  "dataClassification": "synthetic"
+}

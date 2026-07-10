@@ -1,111 +1,215 @@
-# Grubify - Food Delivery App
+# Grifols Plasma Supply — demostración de SRE Agent
 
-A modern food delivery application built with React TypeScript frontend and .NET backend, designed for deployment to Azure Container Apps using Azure Developer CLI (azd).
+Aplicación técnica ficticia y no oficial para demostrar investigación y recuperación de un incidente de reserva logística de cadena de frío en Azure Container Apps.
 
-## 🍕 Features
+> **Aviso obligatorio:** todo el contenido y todos los identificadores son sintéticos. La aplicación no contiene datos de pacientes ni datos clínicos, no representa procesos reales de Grifols y no realiza afirmaciones sobre productos, eficacia o resultados. No utiliza logotipos oficiales.
 
-- **Modern UI**: Beautiful, responsive design inspired by popular food delivery apps
-- **Real Food Content**: Sample restaurants and food items with real images from Unsplash
-- **Complete Food Delivery Flow**: Browse restaurants → Add to cart → Checkout → Track orders
-- **Azure Container Apps**: Scalable, serverless container hosting
-- **Azure Developer CLI**: One-command deployment and management
+## Arquitectura
 
-## 🏗️ Architecture
+```text
+Navegador
+  └─ HTTPS → Container App frontend (Nginx, puerto 80)
+                ├─ SPA React/TypeScript
+                └─ /api y /health → Container App backend (.NET 9, puerto 8080)
+                                         ├─ catálogo sintético en memoria
+                                         ├─ reserva determinista de cadena de frío
+                                         └─ JSON logs + X-Correlation-ID
 
-- **Frontend**: React 18 + TypeScript + Material-UI
-- **Backend**: .NET 9 Web API with RESTful endpoints
-- **Infrastructure**: Azure Container Apps + Container Registry
-- **Deployment**: Azure Developer CLI (azd)
-
-## 🚀 Complete Deployment Guide
-
-This guide shows how to deploy Grubify with **both backend versions** (v1 with memory leak, v2 with payment failures) for testing Azure SRE Agent scenarios.
-
-## 📋 Prerequisites
-
-Before deploying Grubify, ensure you have the following tools installed and running:
-
-### Required Tools
-- **[Azure Developer CLI (azd)](https://learn.microsoft.com/en-us/azure/developer/azure-developer-cli/install-azd)** - Latest version
-- **[Docker Desktop](https://www.docker.com/products/docker-desktop/)** - Must be **running** before deployment
-- **[Azure CLI](https://docs.microsoft.com/en-us/cli/azure/install-azure-cli)** - For additional Azure operations
-- **Azure Subscription** - With Contributor/Owner permissions
-
-### ⚠️ Important: Docker Desktop
-**Docker Desktop must be running before executing `azd up`**. The deployment will fail if Docker is not started.
-
-To start Docker Desktop:
-- **macOS/Windows**: Launch Docker Desktop application
-- **Linux**: Run `sudo systemctl start docker`
-
-Verify Docker is running:
-```bash
-open -a Docker
-docker --version
-docker ps
+Azure Monitor
+  ├─ Log Analytics (30 días)
+  ├─ Application Insights basado en workspace
+  ├─ alerta Requests/5xx (8 en 5 min, evaluación cada minuto, severidad 2)
+  └─ SRE Agent en modo Review
 ```
 
-### Prerequisites
+El navegador siempre usa rutas del mismo origen. `BACKEND_URL` se inyecta al iniciar Nginx y nunca se compila una URL de despliegue en el bundle.
 
-## 🚀 Quick Start
+## Flujo funcional
 
-### 1. Prerequisites Check
-Before starting, run our prerequisites check script:
+1. Explorar y filtrar centros de distribución sintéticos.
+2. Seleccionar suministros terapéuticos genéricos.
+3. crear una requisición de reposición para una instalación receptora sintética.
+4. reservar el despacho de cadena de frío.
+5. consultar el envío y sus hitos de seguimiento.
 
-```bash
-# Run the automated prerequisites check
-./scripts/check-prerequisites.sh
+API:
 
+- `/api/distribution-centers`
+- `/api/therapy-supplies`
+- `/api/requisitions`
+- `/api/dispatch-reservations`
+- `/api/shipments`
+- `/health`
 
-### 2. Initial Azure Setup
+## Incidente controlado
 
-```bash
-# Clone the repository
-git clone https://github.com/dm-chelupati/grubify.git
-cd grubify
+`DEMO_COLD_CHAIN_FAILURE_RATE` acepta exclusivamente un entero de `0` a `100` y usa `0` si no se configura. La aplicación no arranca con otro valor.
 
-# ⚠️ IMPORTANT: Start Docker Desktop before proceeding
-# Verify Docker is running
-docker ps
+- `0`: todas las reservas válidas tienen éxito.
+- `100`: todas devuelven HTTP `503` y `COLD_CHAIN_GATEWAY_UNAVAILABLE`.
+- `1–99`: un hash estable del ID de requisición elige un bucket reproducible.
 
-# Login to Azure
-azd auth login
-az login --use-device-code
+Cada respuesta incluye `X-Correlation-ID`; el error incluye el mismo valor en el cuerpo. El backend registra campos JSON para correlación, requisición, centro, tasa, bucket, código y una pista segura de configuración. Nunca crea un envío cuando falla la reserva.
 
-# Initialize azd project (if not already done)
-azd init
+## Salvaguarda de destino
 
-# Set Azure location
-azd env set AZURE_LOCATION eastus2
+Todos los scripts usan por defecto:
+
+| Valor | Destino permitido |
+|---|---|
+| Suscripción | `5305e853-a63b-4b82-9a3f-6fde18c1a798` |
+| Grupo de recursos existente | `rg-demo-sre-agent-v1` |
+| Región | `eastus2` |
+
+`scripts/Guard-AzureTarget.ps1` detiene la ejecución si la cuenta activa, el grupo o la región no coinciden. La plantilla Bicep referencia el grupo como **existente**: no lo crea ni lo elimina.
+
+## Requisitos
+
+- PowerShell 7
+- Azure CLI con extensiones `containerapp` y `account`
+- Azure Developer CLI opcional
+- .NET SDK 9
+- Node.js 24 y npm 11
+- GitHub CLI para crear el issue sintético opcional
+- Permisos para despliegues a nivel de suscripción y grupo
+
+Docker local no es necesario: `Deploy-Applications.ps1` usa compilaciones remotas de ACR.
+
+```powershell
+az login
+az account set --subscription 5305e853-a63b-4b82-9a3f-6fde18c1a798
+.\scripts\Guard-AzureTarget.ps1
 ```
 
-### 3. Deploy Infrastructure & Applications
+## Desarrollo local
 
-```bash
-# Deploy infrastructure and frontend first
-azd up
+Backend:
+
+```powershell
+dotnet restore .\GrifolsPlasmaSupply.sln --source https://api.nuget.org/v3/index.json
+$env:DEMO_COLD_CHAIN_FAILURE_RATE = '0'
+dotnet run --project .\GrifolsPlasmaSupply.Api
 ```
 
-This creates:
-- **Resource Group**: `rg-grubify-app`
-- **Container Registry**: `crgrubify`
-- **Container Apps Environment**: `cae-grubify`
-- **API Container App**: `ca-grubify-api`
-- **Frontend Container App**: `ca-grubify-frontend`
-- **Log Analytics Workspace**: `log-grubify`
+Frontend (el proxy de desarrollo dirige `/api` a `http://localhost:5291`):
 
-### 6. Ready for SRE Scenarios
+```powershell
+Set-Location .\grifols-plasma-supply-frontend
+npm ci
+npm start
+```
 
-Now you have:
-- ✅ **Frontend deployed** and working
-- ✅ **Backend deployed** and working
-- ✅ **Infrastructure configured** for testing scenarios
+## Infraestructura
 
-**SRE Agent Setup:**
-1. **Create agent** - ([Azure SRE Agent Usage Guide](https://learn.microsoft.com/en-us/azure/sre-agent/usage))
-2. **Map GitHub repo** that you cloned this to: **https://github.com/dm-chelupati/grubify.git**
-3. **Connect Service Now** to your SRE agent
-4. **Setup incident handler** with custom instructions for automated diagnosis and mitigation
-5. **Simulate memory leak** using the deployed application endpoints
-6. **Create incident in Service Now** to trigger SRE agent response
+`infra/main.bicep` despliega en el grupo existente:
 
+- Log Analytics con retención de 30 días y Application Insights basado en workspace.
+- ACR Basic con administrador y pull anónimo deshabilitados.
+- Container Apps Environment integrado con Log Analytics.
+- identidad UAMI compartida con `AcrPull`; no existen contraseñas de registro.
+- backend externo en `8080` y frontend externo en `80`.
+- UAMI de SRE y `Microsoft.App/agents@2026-01-01` llamado `sre-agent-grifols-v1`.
+- action group y alerta métrica de severidad 2.
+
+Los Container Apps empiezan con la imagen pública de ejemplo para permitir aprovisionar antes de publicar imágenes propias.
+
+### Riesgo RBAC que debe revisarse
+
+La UAMI del agente recibe Reader, Log Analytics Reader, Monitoring Reader y Container Apps Contributor en el grupo, además de **Monitoring Contributor en toda la suscripción**. Estos dos permisos de escritura son amplios. El agente está en modo **Review**, de modo que toda mitigación exige aprobación humana. Revise asignaciones y ámbito antes de desplegar.
+
+Validación local sin tocar Azure:
+
+```powershell
+az bicep build --file .\infra\main.bicep
+```
+
+El operador autorizado debe ejecutar después su revisión de políticas, cuotas y `what-if` antes del despliegue:
+
+```powershell
+az deployment sub what-if `
+  --subscription 5305e853-a63b-4b82-9a3f-6fde18c1a798 `
+  --location eastus2 `
+  --template-file .\infra\main.bicep `
+  --parameters .\infra\main.parameters.json
+
+az deployment sub create `
+  --name grifols-plasma-supply-v1 `
+  --subscription 5305e853-a63b-4b82-9a3f-6fde18c1a798 `
+  --location eastus2 `
+  --template-file .\infra\main.bicep `
+  --parameters .\infra\main.parameters.json
+```
+
+## Imágenes, actualización y smoke test
+
+```powershell
+.\scripts\Deploy-Applications.ps1
+.\scripts\Test-Smoke.ps1
+```
+
+El script crea tags inmutables, ejecuta dos `az acr build`, configura el pull con la UAMI, actualiza las revisiones, espera readiness y verifica frontend, backend y proxy del mismo origen.
+
+## Configurar SRE Agent
+
+```powershell
+.\scripts\Configure-SreAgent.ps1
+```
+
+El script obtiene en memoria un token para `https://azuresre.dev`, realiza `PUT` idempotentes y verifica:
+
+- conector Log Analytics con identidad administrada;
+- definición de conector GitHub OAuth sin credenciales;
+- repositorio público `/api/v2/repos/grifols-sre-agent-demo`;
+- subagente `code-analyzer` codificado en base64.
+
+No persiste ni imprime tokens o PAT. **Paso manual obligatorio:** completar el consentimiento GitHub OAuth de forma interactiva en el portal de Azure.
+
+Para la automatización de GitHub, configure exclusivamente el secreto `SRE_TRIGGER_URL`. El workflow se activa al añadir la etiqueta `sre-investigate` a una incidencia cuyo título empiece por `[SYNTHETIC]`, o manualmente con un ID `SYNTH-*` y la confirmación sintética activada.
+
+## Cronología de la demostración
+
+1. Comprobar que la tasa es `0` y ejecutar `Test-Smoke.ps1`.
+2. Ejecutar `Start-ColdChainIncident.ps1`; genera al menos diez 503 válidos en menos de cinco minutos e imprime cada correlación.
+3. Esperar la evaluación de la alerta (un minuto).
+4. Pedir al agente: “Investiga el incidente sintético `COLD_CHAIN_GATEWAY_UNAVAILABLE`; correlaciona métrica, logs y revisión, y propone una mitigación sin ejecutarla”.
+5. Revisar la propuesta y aprobar explícitamente solo la mitigación prevista.
+6. Ejecutar `Recover-ColdChainIncident.ps1`.
+7. Confirmar respuesta 2xx, ID de envío, tracking y recuperación de la métrica.
+
+Runbook: [`docs/runbooks/cold-chain-reservation-5xx.md`](docs/runbooks/cold-chain-reservation-5xx.md).
+
+## Validación
+
+```powershell
+dotnet restore .\GrifolsPlasmaSupply.sln --source https://api.nuget.org/v3/index.json
+dotnet test .\GrifolsPlasmaSupply.sln --no-restore
+
+Set-Location .\grifols-plasma-supply-frontend
+npm ci
+$env:CI = 'true'
+npm test -- --watchAll=false --runInBand
+npm run typecheck
+npm run build
+Set-Location ..
+
+az bicep build --file .\infra\main.bicep
+```
+
+Las pruebas cubren éxito, fallo determinista, configuración inválida, validación, ausencia de envíos tras fallo, propagación de errores, aviso visible y flujo crítico.
+
+## Coste y limpieza
+
+ACR, Log Analytics, Application Insights, Container Apps y SRE Agent pueden generar coste. Use límites del entorno demo y revise la ingestión. Para limpiar, elimine únicamente los recursos con tags `purpose=sre-agent-demo`, `environment=demo` y `dataClassification=synthetic`; **no elimine automáticamente el grupo compartido**. Revise también las asignaciones RBAC de suscripción.
+
+## Solución de problemas
+
+- `401/403`: confirme cuenta, suscripción, consentimiento y RBAC; no sustituya identidad administrada por secretos.
+- Container App sin revisión ready: inspeccione `az containerapp revision list` y los logs de consola.
+- Nginx devuelve `502`: confirme `BACKEND_URL` y `/health` del backend.
+- No se activa la alerta: confirme al menos ocho 503 dentro de cinco minutos y la dimensión `statusCodeCategory=5xx`.
+- Configuración rechazada al arrancar: corrija `DEMO_COLD_CHAIN_FAILURE_RATE` a un entero entre 0 y 100.
+- Restore NuGet sin origen: use explícitamente `https://api.nuget.org/v3/index.json`.
+
+## Atribución de migración
+
+Esta demostración se migró arquitectónicamente desde el seed abierto **Grubify food-delivery**; toda su terminología funcional anterior fue retirada y no representa el dominio operativo actual.
