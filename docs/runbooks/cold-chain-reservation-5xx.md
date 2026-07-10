@@ -119,6 +119,10 @@ Antes de confiar en la investigación, confirmar:
 - `incidentManagementConfiguration.type=AzMonitor`;
 - `monthlyAgentUnitLimit=1000`.
 
+`code-analyzer` dispone de comandos Azure CLI de lectura, ayuda y escritura para ejecutar
+la mitigación aprobada; el agente y el filtro permanecen `Review` + `Low`, por lo que
+ninguna escritura se ejecuta sin aprobación explícita.
+
 ## 5. Trigger controlado
 
 El workflow solo usa el secreto `SRE_TRIGGER_URL` apuntando al webhook público
@@ -129,7 +133,8 @@ Un issue debe tener:
 - título con prefijo `[SYNTHETIC]`;
 - etiqueta de control evaluada `sre-investigate`.
 
-Alternativamente, ejecutar `workflow_dispatch` con `syntheticIncidentId`. La respuesta
+Alternativamente, ejecutar `workflow_dispatch` con un `syntheticIncidentId` que empiece
+por `SYNTH-`. La respuesta
 correcta es HTTP `202`, `success=true` y `threadId` no vacío.
 
 ```powershell
@@ -137,7 +142,7 @@ correcta es HTTP `202`, `success=true` y `threadId` no vacío.
 
 gh workflow run sre-agent-investigate.yml `
   --repo marioaguileraaa/grifols-sre-agent-demo `
-  -f syntheticIncidentId=manual-demo-001
+  -f syntheticIncidentId=SYNTH-manual-demo-001
 ```
 
 ## 6. Proponer mitigación

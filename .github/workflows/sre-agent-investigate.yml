@@ -17,10 +17,14 @@ permissions:
 jobs:
   investigate:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
       (
+        github.event_name == 'workflow_dispatch' &&
+        startsWith(inputs.syntheticIncidentId, 'SYNTH-')
+      ) ||
+      (
+        github.event_name == 'issues' &&
         startsWith(github.event.issue.title, '[SYNTHETIC]') &&
-        contains(github.event.issue.labels.*.name, 'sre-investigate')
+        github.event.label.name == 'sre-investigate'
       )
     runs-on: ubuntu-latest
     steps:

@@ -136,8 +136,8 @@ El script:
 3. configura autenticación GitHub con PAT de entorno o exige completar OAuth;
 4. hace PUT del repositorio `marioaguileraaa/grifols-sre-agent-demo`, rama `main`, y espera `cloneStatus=Ready`;
 5. valida que los conectores ARM de Log Analytics y Application Insights usan `id-grifols-sre-v1`;
-6. crea/actualiza y verifica `code-analyzer` y el filtro Sev2 Review;
-7. crea o actualiza idempotentemente el HTTP trigger con `agentPrompt`, `agent` y `mode=Review`;
+6. crea/actualiza y verifica `code-analyzer` con herramientas Azure CLI de lectura, ayuda y escritura; `Review` + `Low` mantiene toda escritura sujeta a aprobación explícita;
+7. crea o actualiza idempotentemente el HTTP trigger con `agentPrompt`, `agent` y `agentMode=Review`;
 8. opcionalmente guarda el webhook mediante `-SetGitHubSecret`.
 
 Las extensiones de conectores y los extras data-plane siguen usando APIs preview `2025-05-01-preview`/`api/v2`; el script falla de forma explícita si el contrato cambia.
@@ -159,7 +159,7 @@ El script envía el PAT al almacenamiento seguro del dominio del agente y no lo 
 `.github/workflows/sre-agent-investigate.yml` responde a:
 
 - un issue donde la única etiqueta evaluada es `sre-investigate` y el título empieza por `[SYNTHETIC]`;
-- un `workflow_dispatch` manual con `syntheticIncidentId`.
+- un `workflow_dispatch` manual con `syntheticIncidentId` que empiece por `SYNTH-`.
 
 El payload se construye con `jq --arg`, por lo que título/cuerpo/input no se interpolan como shell. El único secreto es `SRE_TRIGGER_URL`; no hay Azure login, OIDC, variables Azure, token ni header `Authorization`.
 
@@ -172,7 +172,7 @@ El secreto apunta al endpoint público documentado `/api/v1/httptriggers/trigger
 # Alternativa manual sin issue
 gh workflow run sre-agent-investigate.yml `
   --repo marioaguileraaa/grifols-sre-agent-demo `
-  -f syntheticIncidentId=manual-demo-001
+  -f syntheticIncidentId=SYNTH-manual-demo-001
 ```
 
 ## Prueba normal

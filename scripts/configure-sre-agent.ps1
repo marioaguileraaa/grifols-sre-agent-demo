@@ -30,6 +30,8 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($signedInUserId)) {
 $existingAdminAssignments = az role assignment list `
     --assignee-object-id $signedInUserId `
     --scope $agentResourceId `
+    --all `
+    --fill-principal-name false `
     --output json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) {
     throw 'Unable to inspect SRE Agent Administrator assignments.'
@@ -151,7 +153,7 @@ if ($null -ne $lastDataPlaneError) {
 }
 
 $domainsResponse = Invoke-AgentApi -Method Get -Path '/api/v2/github/domains' -Body $null
-$domains = Get-ResponseItems -Response $domainsResponse -PropertyNames @('value', 'domains', 'items')
+$domains = Get-ResponseItems -Response $domainsResponse -PropertyNames @('value', 'values', 'domains', 'items')
 $githubDomain = $domains | Where-Object {
     ($_.name ?? $_.domain ?? $_.properties.domain) -in @('github_com', 'github.com')
 } | Select-Object -First 1
@@ -179,6 +181,8 @@ if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_PAT)) {
 }
 
 $repositoryBody = @{
+    name = $RepositoryName
+    type = 'CodeRepo'
     properties = @{
         url = $RepositoryUrl
         type = 'GitHub'
@@ -234,6 +238,8 @@ Investigate only the fictional Grifols Plasma Supply demo. Correlate Azure Conta
         tools = @(
             'SearchMemory',
             'RunAzCliReadCommands',
+            'RunAzCliWriteCommands',
+            'GetAzCliHelp',
             'QueryLogAnalyticsByWorkspaceId',
             'ExecutePythonCode',
             'FindConnectedGitHubRepo'
@@ -267,10 +273,10 @@ $triggerPayload = @{
     description = 'Investigate a controlled synthetic incident from GitHub.'
     agentPrompt = 'Analyze the supplied synthetic incident using Azure Monitor telemetry and the connected repository. Return evidence and a Review-mode mitigation proposal.'
     agent = 'code-analyzer'
-    mode = 'Review'
+    agentMode = 'Review'
 }
 $triggerListResponse = Invoke-AgentApi -Method Get -Path '/api/v1/httptriggers' -Body $null
-$triggers = Get-ResponseItems -Response $triggerListResponse -PropertyNames @('value', 'triggers', 'items')
+$triggers = Get-ResponseItems -Response $triggerListResponse -PropertyNames @('value', 'values', 'triggers', 'items')
 $existingTrigger = $triggers | Where-Object {
     ($_.name ?? $_.properties.name) -eq $triggerName
 } | Select-Object -First 1
@@ -334,7 +340,7 @@ if (($verifiedRepo.properties.cloneStatus ?? $verifiedRepo.cloneStatus) -ne 'Rea
 $verifiedSubagent = Invoke-AgentApi -Method Get -Path '/api/v2/extendedAgent/agents/code-analyzer' -Body $null
 $verifiedFilter = Invoke-AgentApi -Method Get -Path '/api/v2/extendedAgent/incidentFilters/grifols-cold-chain-sev2' -Body $null
 $verifiedTriggersResponse = Invoke-AgentApi -Method Get -Path '/api/v1/httptriggers' -Body $null
-$verifiedTriggers = Get-ResponseItems -Response $verifiedTriggersResponse -PropertyNames @('value', 'triggers', 'items')
+$verifiedTriggers = Get-ResponseItems -Response $verifiedTriggersResponse -PropertyNames @('value', 'values', 'triggers', 'items')
 $verifiedTrigger = $verifiedTriggers | Where-Object {
     ($_.id ?? $_.triggerId ?? $_.properties.id) -eq $triggerId
 } | Select-Object -First 1
@@ -345,13 +351,13 @@ $verifiedFilterMode = $verifiedFilter.properties.agentMode ?? $verifiedFilter.ag
 if ($verifiedFilterMode -ne 'Review') {
     throw "Incident filter must remain in Review mode. Reported: '$verifiedFilterMode'."
 }
-$verifiedTriggerMode = $verifiedTrigger.mode ?? $verifiedTrigger.properties.mode
+$verifiedTriggerMode = $verifiedTrigger.agentMode ?? $verifiedTrigger.properties.agentMode
 $verifiedTriggerAgent = $verifiedTrigger.agent ?? $verifiedTrigger.properties.agent
 $verifiedTriggerPrompt = $verifiedTrigger.agentPrompt ?? $verifiedTrigger.properties.agentPrompt
 if ($verifiedTriggerMode -ne 'Review' -or
     $verifiedTriggerAgent -ne 'code-analyzer' -or
     [string]::IsNullOrWhiteSpace($verifiedTriggerPrompt)) {
-    throw 'HTTP trigger did not preserve mode=Review, agent=code-analyzer, and agentPrompt.'
+    throw 'HTTP trigger did not preserve agentMode=Review, agent=code-analyzer, and agentPrompt.'
 }
 
 Write-Host "SRE Agent configuration verified: repo=Ready, connectors=UAMI, incident=AzMonitor, mode=Review, access=Low, monthlyLimit=$MonthlyAgentUnitLimit."
