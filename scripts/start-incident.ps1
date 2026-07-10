@@ -4,13 +4,13 @@ param(
     [string] $SubscriptionId = '5305e853-a63b-4b82-9a3f-6fde18c1a798',
     [string] $ResourceGroupName = 'rg-demo-sre-agent-v1',
     [string] $BackendAppName = 'ca-grifols-supply-api',
-    [int] $RequestCount = 8
+    [int] $RequestCount = 10
 )
 
 . "$PSScriptRoot\AzureDemo.Common.ps1"
 
-if ($RequestCount -lt 8) {
-    throw 'RequestCount must be at least 8 so the >5/5m alert threshold is crossed.'
+if ($RequestCount -lt 10) {
+    throw 'RequestCount must be at least 10 so the >5/5m alert threshold is crossed with a clear demo signal.'
 }
 
 Assert-DemoAzureContext -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName

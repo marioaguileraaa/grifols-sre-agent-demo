@@ -174,7 +174,7 @@ Resultado esperado: HTTP `201` y salida `trackingId=GPS-...`. En la UI, seleccio
 1. T-2 min: confirmar que el backend está sano.
 2. T0: ejecutar `.\scripts\start-incident.ps1`.
 3. T0–T1: una nueva revisión queda `Healthy/Running` con rate `100`.
-4. T1: el script envía al menos ocho solicitudes válidas, comprueba cada `503` e imprime correlation IDs.
+4. T1: el script envía diez solicitudes válidas, comprueba cada `503` e imprime correlation IDs.
 5. T2–T6: la alerta `>5` 5xx en ventana de 5 minutos se activa.
 6. T3–T8: Azure SRE Agent abre investigación Sev2 con `code-analyzer`.
 7. Revisar métricas, KQL, revisión de configuración y evidencia `file:line`.
@@ -211,7 +211,7 @@ Consultar el runbook detallado en [`docs/runbooks/cold-chain-reservation-5xx.md`
 - [ ] Flujo centro → suministro → requisición → despacho → tracking.
 - [ ] Rate `0` devuelve `201`.
 - [ ] Rate `100` devuelve `503`, código estable y correlation ID.
-- [ ] Ocho fallos cruzan el umbral de alerta.
+- [ ] Diez fallos cruzan el umbral `GreaterThan 5`.
 - [ ] Logs contienen centro, requisición, error code y root-cause clue.
 - [ ] SRE Agent está en `Low` + `Review`.
 - [ ] Conectores ARM, `cloneStatus`, subagente y filtro están validados por separado.
@@ -257,7 +257,7 @@ Eliminar solo los recursos etiquetados `purpose=sre-agent-demo` tras aprobación
 | Salvaguarda de suscripción falla | `az account set --subscription 5305e853-a63b-4b82-9a3f-6fde18c1a798` |
 | Revisión no está `Healthy/Running` | `az containerapp revision list -g rg-demo-sre-agent-v1 -n ca-grifols-supply-api -o table` |
 | Frontend no llega a API | comprobar `REACT_APP_API_BASE_URL` y `AllowedOrigins__0` |
-| No aparece alerta | validar dimensión `statusCodeCategory=5xx`, ventana de 5 min y al menos ocho 503 |
+| No aparece alerta | validar dimensión `statusCodeCategory=5xx`, ventana de 5 min y diez 503 |
 | No hay logs | comprobar `ContainerAppConsoleLogs_CL` y configuración LAW del environment |
 | ARM del agente funciona pero no extras | ejecutar `configure-sre-agent.ps1`; revisar `cloneStatus` y cada conector |
 | Token data-plane falla | `az login --scope "https://azuresre.dev/.default"` |
