@@ -187,7 +187,12 @@ $githubDomainStatus = @(
     Get-OptionalPropertyValue -InputObject $githubDomain -PropertyName 'status'
     Get-OptionalPropertyValue -InputObject $githubDomain -PropertyName 'connectionStatus'
 ) | Where-Object { $null -ne $_ } | Select-Object -First 1
-$domainReady = $null -ne $githubDomain -and $githubDomainStatus -in @('Connected', 'Ready', 'Authenticated', 'Succeeded')
+$githubDomainIsHealthy = Get-OptionalPropertyValue -InputObject $githubDomain -PropertyName 'isHealthy'
+$domainReady = if ($null -ne $githubDomainIsHealthy) {
+    $githubDomainIsHealthy -eq $true
+} else {
+    $null -ne $githubDomain -and $githubDomainStatus -in @('Connected', 'Ready', 'Authenticated', 'Succeeded')
+}
 
 if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_PAT)) {
     Invoke-AgentApi -Method Put -Path '/api/v2/github/domains/github_com' -Body @{
