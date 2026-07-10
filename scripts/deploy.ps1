@@ -115,6 +115,7 @@ $dispatchResponse = Invoke-WebRequest `
     -Uri "$backendOrigin/api/cold-chain-dispatch" `
     -ContentType 'application/json' `
     -Body ((New-DemoDispatchPayload) | ConvertTo-Json -Depth 8) `
+    -MaximumRedirection 0 `
     -SkipHttpErrorCheck
 if ($dispatchResponse.StatusCode -ne 201) {
     throw "Healthy dispatch smoke expected HTTP 201 but received $($dispatchResponse.StatusCode): $($dispatchResponse.Content)"

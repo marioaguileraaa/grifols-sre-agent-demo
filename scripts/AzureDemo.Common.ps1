@@ -47,7 +47,9 @@ function Wait-ContainerAppRevision {
         $latest = $revisions |
             Sort-Object { [DateTimeOffset]$_.properties.createdTime } -Descending |
             Select-Object -First 1
-        if ($latest.properties.healthState -eq 'Healthy' -and $latest.properties.runningState -eq 'Running') {
+        $readyRunningStates = @('Running', 'RunningAtMinScale', 'RunningAtMaxScale')
+        if ($latest.properties.healthState -eq 'Healthy' -and
+            $latest.properties.runningState -in $readyRunningStates) {
             Write-Host "Revision ready: $($latest.name)"
             return $latest
         }

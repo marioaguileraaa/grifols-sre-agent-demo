@@ -35,6 +35,7 @@ $response = Invoke-WebRequest `
     -Uri "https://$fqdn/api/cold-chain-dispatch" `
     -ContentType 'application/json' `
     -Body ((New-DemoDispatchPayload) | ConvertTo-Json -Depth 8) `
+    -MaximumRedirection 0 `
     -SkipHttpErrorCheck
 if ($response.StatusCode -ne 201) {
     throw "Recovery smoke test expected HTTP 201 but received $($response.StatusCode): $($response.Content)"
