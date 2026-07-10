@@ -127,6 +127,14 @@ ninguna escritura se ejecuta sin aprobación explícita.
 
 El workflow solo usa el secreto `SRE_TRIGGER_URL` apuntando al webhook público
 `/api/v1/httptriggers/trigger/{id}`. No usa Azure login ni header de autenticación.
+La configuración completa requiere:
+
+```powershell
+.\scripts\configure-sre-agent.ps1 -SetGitHubSecret
+```
+
+Sin `-SetGitHubSecret`, el script termina como `INCOMPLETE`, no muestra la URL del
+trigger y no informa éxito. El switch canaliza el valor directamente a `gh secret set`.
 
 Un issue debe tener:
 

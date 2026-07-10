@@ -309,10 +309,7 @@ if ($SetGitHubSecret) {
     }
     Write-Host "GitHub secret SRE_TRIGGER_URL set for $GitHubRepository without printing the URL."
 } else {
-    Write-Host 'MANUAL ACTION: set the only workflow secret with the public webhook URL below:'
-    Write-Host "gh secret set SRE_TRIGGER_URL --repo $GitHubRepository"
-    Write-Host "Trigger URL: $triggerUrl"
-    Write-Host 'Alternatively rerun with -SetGitHubSecret to pipe it securely.'
+    throw 'INCOMPLETE: SRE_TRIGGER_URL was not set. Rerun with -SetGitHubSecret so the trigger URL is piped securely to GitHub without being printed.'
 }
 
 $verifiedAgent = az rest `

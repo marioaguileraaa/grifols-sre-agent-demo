@@ -126,7 +126,7 @@ Después del ARM/Bicep:
 
 ```powershell
 az login --scope "https://azuresre.dev/.default"
-.\scripts\configure-sre-agent.ps1
+.\scripts\configure-sre-agent.ps1 -SetGitHubSecret
 ```
 
 El script:
@@ -138,7 +138,7 @@ El script:
 5. valida que los conectores ARM de Log Analytics y Application Insights usan `id-grifols-sre-v1`;
 6. crea/actualiza y verifica `code-analyzer` con herramientas Azure CLI de lectura, ayuda y escritura; `Review` + `Low` mantiene toda escritura sujeta a aprobación explícita;
 7. crea o actualiza idempotentemente el HTTP trigger con `agentPrompt`, `agent` y `agentMode=Review`;
-8. opcionalmente guarda el webhook mediante `-SetGitHubSecret`.
+8. exige `-SetGitHubSecret`, envía el webhook directamente a GitHub y solo entonces completa la verificación.
 
 Las extensiones de conectores y los extras data-plane siguen usando APIs preview `2025-05-01-preview`/`api/v2`; el script falla de forma explícita si el contrato cambia.
 
@@ -152,7 +152,7 @@ $env:GITHUB_PAT = '<PAT con scope repo>'
 Remove-Item Env:GITHUB_PAT
 ```
 
-El script envía el PAT al almacenamiento seguro del dominio del agente y no lo imprime ni escribe en repositorio/disco. Sin `GITHUB_PAT` ni dominio ya autenticado, imprime la URL OAuth y termina como `INCOMPLETE`; hay que completar OAuth y repetir el script.
+El script envía el PAT al almacenamiento seguro del dominio del agente y no lo imprime ni escribe en repositorio/disco. Sin `GITHUB_PAT` ni dominio ya autenticado, imprime la URL OAuth y termina como `INCOMPLETE`; hay que completar OAuth y repetir el script con `-SetGitHubSecret`. Sin ese switch también termina como `INCOMPLETE`: la URL del trigger nunca se imprime y no se informa éxito hasta guardar `SRE_TRIGGER_URL`.
 
 ## Configuración del workflow controlado
 
@@ -231,6 +231,7 @@ Consultar el runbook detallado en [`docs/runbooks/cold-chain-reservation-5xx.md`
 - [ ] `monthlyAgentUnitLimit=1000` y plataforma `AzMonitor`.
 - [ ] Conectores ARM, `cloneStatus`, subagente y filtro están validados por separado.
 - [ ] Frontend usa `/api`, Nginx usa `BACKEND_URL` y los probes finales están sanos.
+- [ ] `configure-sre-agent.ps1 -SetGitHubSecret` guardó `SRE_TRIGGER_URL` sin mostrar su valor.
 - [ ] Workflow usa solo `SRE_TRIGGER_URL`, label `sre-investigate` y prefijo `[SYNTHETIC]`.
 - [ ] Mitigación requiere aprobación.
 - [ ] Recuperación devuelve tracking ID.
@@ -279,4 +280,4 @@ Eliminar solo los recursos etiquetados `purpose=sre-agent-demo` tras aprobación
 | ARM del agente funciona pero no extras | ejecutar `configure-sre-agent.ps1`; revisar rol Administrator, GitHub domain, `cloneStatus=Ready` y cada conector UAMI |
 | Token data-plane falla | `az login --scope "https://azuresre.dev/.default"` |
 | Workflow no obtiene 202 | revisar únicamente el secreto `SRE_TRIGGER_URL` y que sea `/api/v1/httptriggers/trigger/{id}` |
-| Configuración termina `INCOMPLETE` | completar la URL OAuth o volver a ejecutar con `GITHUB_PAT` solo en entorno de proceso |
+| Configuración termina `INCOMPLETE` | completar OAuth si se solicita y volver a ejecutar con `-SetGitHubSecret`; `GITHUB_PAT` puede usarse solo en el entorno de proceso |
