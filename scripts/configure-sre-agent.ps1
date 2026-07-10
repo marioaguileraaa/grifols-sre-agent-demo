@@ -30,7 +30,6 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($signedInUserId)) {
 $existingAdminAssignments = az role assignment list `
     --assignee-object-id $signedInUserId `
     --scope $agentResourceId `
-    --all `
     --fill-principal-name false `
     --output json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) {
