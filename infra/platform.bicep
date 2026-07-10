@@ -123,7 +123,7 @@ resource backend 'Microsoft.App/containerApps@2024-03-01' = {
       activeRevisionsMode: 'Single'
       ingress: {
         external: true
-        targetPort: 8080
+        targetPort: backendImage == helloWorldImage ? 80 : 8080
         transport: 'auto'
         allowInsecure: false
       }
@@ -328,6 +328,12 @@ resource sreAgent 'Microsoft.App/agents@2026-01-01' = {
         appId: insights.properties.AppId
       }
     }
+    incidentManagementConfiguration: {
+      type: 'AzMonitor'
+    }
+    // Supported by the 2026-01-01 service API; the bundled Bicep type is lagging the REST schema.
+    #disable-next-line BCP037
+    monthlyAgentUnitLimit: 1000
     upgradeChannel: 'Stable'
   }
   dependsOn: [
@@ -371,8 +377,8 @@ resource metricAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
           criterionType: 'StaticThresholdCriterion'
           metricNamespace: 'Microsoft.App/containerApps'
           metricName: 'Requests'
-          operator: 'GreaterThanOrEqual'
-          threshold: 8
+          operator: 'GreaterThan'
+          threshold: 5
           timeAggregation: 'Total'
           dimensions: [
             {

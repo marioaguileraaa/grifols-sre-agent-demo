@@ -18,7 +18,7 @@ Navegador
 Azure Monitor
   ├─ Log Analytics (30 días)
   ├─ Application Insights basado en workspace
-  ├─ alerta Requests/5xx (8 en 5 min, evaluación cada minuto, severidad 2)
+  ├─ alerta Requests/5xx (total > 5 en 5 min, evaluación cada minuto, severidad 2)
   └─ SRE Agent en modo Review
 ```
 
@@ -158,11 +158,12 @@ El script crea tags inmutables, ejecuta dos `az acr build`, configura el pull co
 El script obtiene en memoria un token para `https://azuresre.dev`, realiza `PUT` idempotentes y verifica:
 
 - conector Log Analytics con identidad administrada;
-- definición de conector GitHub OAuth sin credenciales;
+- autenticación GitHub actual mediante `/api/v2/github/oauth/config` o, si se proporciona solo al proceso, `GITHUB_PAT` mediante `/api/v2/github/domains/github_com`;
 - repositorio público `/api/v2/repos/grifols-sre-agent-demo`;
-- subagente `code-analyzer` codificado en base64.
+- subagente `code-analyzer` y respuesta Sev2 `cold-chain-sev2-review` con payloads directos de data plane y modo Review;
+- límite mensual de 1000 unidades de agente.
 
-No persiste ni imprime tokens o PAT. **Paso manual obligatorio:** completar el consentimiento GitHub OAuth de forma interactiva en el portal de Azure.
+No persiste ni imprime tokens o PAT. Si no se proporciona `GITHUB_PAT`, el script muestra la URL de autorización devuelta por el agente; complete el consentimiento interactivo y vuelva a ejecutarlo.
 
 Para la automatización de GitHub, configure exclusivamente el secreto `SRE_TRIGGER_URL`. El workflow se activa al añadir la etiqueta `sre-investigate` a una incidencia cuyo título empiece por `[SYNTHETIC]`, o manualmente con un ID `SYNTH-*` y la confirmación sintética activada.
 
@@ -206,7 +207,7 @@ ACR, Log Analytics, Application Insights, Container Apps y SRE Agent pueden gene
 - `401/403`: confirme cuenta, suscripción, consentimiento y RBAC; no sustituya identidad administrada por secretos.
 - Container App sin revisión ready: inspeccione `az containerapp revision list` y los logs de consola.
 - Nginx devuelve `502`: confirme `BACKEND_URL` y `/health` del backend.
-- No se activa la alerta: confirme al menos ocho 503 dentro de cinco minutos y la dimensión `statusCodeCategory=5xx`.
+- No se activa la alerta: confirme que el total es mayor que `5` dentro de cinco minutos (el script envía `10` respuestas 503) y la dimensión `statusCodeCategory=5xx`.
 - Configuración rechazada al arrancar: corrija `DEMO_COLD_CHAIN_FAILURE_RATE` a un entero entre 0 y 100.
 - Restore NuGet sin origen: use explícitamente `https://api.nuget.org/v3/index.json`.
 

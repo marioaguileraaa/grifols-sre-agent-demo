@@ -69,6 +69,12 @@ az containerapp update `
     --image "$loginServer/grifols-plasma-backend:$ImageTag" `
     --set-env-vars 'DEMO_COLD_CHAIN_FAILURE_RATE=0' `
     --output none
+az containerapp ingress update `
+    --subscription $SubscriptionId `
+    --resource-group $ResourceGroup `
+    --name $BackendAppName `
+    --target-port 8080 `
+    --output none
 Wait-ContainerAppReady -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -AppName $BackendAppName
 
 $backendUrl = Get-ContainerAppUrl -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -AppName $BackendAppName
@@ -78,6 +84,12 @@ az containerapp update `
     --name $FrontendAppName `
     --image "$loginServer/grifols-plasma-frontend:$ImageTag" `
     --set-env-vars "BACKEND_URL=$backendUrl" `
+    --output none
+az containerapp ingress update `
+    --subscription $SubscriptionId `
+    --resource-group $ResourceGroup `
+    --name $FrontendAppName `
+    --target-port 80 `
     --output none
 Wait-ContainerAppReady -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -AppName $FrontendAppName
 

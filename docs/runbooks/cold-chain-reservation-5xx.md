@@ -21,8 +21,8 @@ La alerta tiene severidad 2 y evalúa cada minuto el total de `Requests` del bac
 - métrica: `Requests`
 - dimensión: `statusCodeCategory`
 - filtro: `5xx`
-- operador: `GreaterThanOrEqual`
-- umbral: `8`
+- operador: `GreaterThan`
+- umbral: `5` (se activa a partir de 6; el script genera 10)
 
 Inspección:
 

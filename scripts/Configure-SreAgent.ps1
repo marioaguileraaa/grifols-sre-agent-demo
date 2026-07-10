@@ -4,6 +4,7 @@ param(
     [string]$ResourceGroup = 'rg-demo-sre-agent-v1',
     [string]$Location = 'eastus2',
     [string]$AgentName = 'sre-agent-grifols-v1',
+    [string]$BackendAppName = 'ca-grifols-backend-v1',
     [ValidateRange(1, 10000)][int]$MonthlyAgentUnitLimit = 1000
 )
 
@@ -32,10 +33,10 @@ $workspaceId = az monitor log-analytics workspace show `
     --workspace-name 'law-grifols-sre-v1' `
     --query id `
     --output tsv
-$previewBase = "https://management.azure.com${agentId}"
+$agentBase = "https://management.azure.com${agentId}"
 $agentProperties = az rest `
     --method Get `
-    --url "$previewBase?api-version=2025-05-01-preview" `
+    --url "$agentBase?api-version=2026-01-01" `
     --output json | ConvertFrom-Json
 $agentEndpoint = $agentProperties.properties.agentEndpoint
 $sreIdentityId = $agentProperties.properties.actionConfiguration.identity
@@ -58,6 +59,19 @@ $headers = @{
 }
 $configRoot = Join-Path (Split-Path $PSScriptRoot -Parent) 'sre-config'
 
+function Invoke-DataPlanePut {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][object]$Body
+    )
+    $null = Invoke-RestMethod `
+        -Uri "$agentEndpoint$Path" `
+        -Method Put `
+        -Headers $headers `
+        -ContentType 'application/json' `
+        -Body ($Body | ConvertTo-Json -Depth 20 -Compress)
+}
+
 try {
     $logConnector = @{
         properties = @{
@@ -67,53 +81,83 @@ try {
             identity = $sreIdentityId
         }
     } | ConvertTo-Json -Depth 10 -Compress
-    $githubConnector = @{
-        properties = @{
-            name = 'github-grifols-demo'
-            dataConnectorType = 'GitHubOAuth'
-            dataSource = 'github-oauth'
-        }
-    } | ConvertTo-Json -Depth 10 -Compress
-    az rest --method Put --url "$previewBase/DataConnectors/log-analytics-grifols-demo?api-version=2025-05-01-preview" --body $logConnector --output none
-    az rest --method Put --url "$previewBase/DataConnectors/github-grifols-demo?api-version=2025-05-01-preview" --body $githubConnector --output none
+    az rest `
+        --method Put `
+        --url "$agentBase/DataConnectors/log-analytics-grifols-demo?api-version=2025-05-01-preview" `
+        --body $logConnector `
+        --output none
 
-    $repository = @{
-        name = 'grifols-sre-agent-demo'
-        type = 'CodeRepo'
-        properties = @{
-            url = 'https://github.com/marioaguileraaa/grifols-sre-agent-demo'
-            authConnectorName = 'github-grifols-demo'
+    $domains = Invoke-RestMethod -Uri "$agentEndpoint/api/v2/github/domains" -Method Get -Headers $headers
+    $githubConfigured = @($domains.values).Count -gt 0
+    $processPat = $env:GITHUB_PAT
+    if (-not $githubConfigured -and -not [string]::IsNullOrWhiteSpace($processPat)) {
+        Invoke-DataPlanePut -Path '/api/v2/github/domains/github_com' -Body @{
+            AuthType = 'Pat'
+            Pat = $processPat
         }
-    } | ConvertTo-Json -Depth 10 -Compress
-    $null = Invoke-RestMethod `
-        -Uri "$agentEndpoint/api/v2/repos/grifols-sre-agent-demo" `
-        -Method Put `
-        -Headers $headers `
-        -ContentType 'application/json' `
-        -Body $repository
+        $processPat = $null
+        $githubConfigured = $true
+    }
 
-    $subagentSpec = Get-Content (Join-Path $configRoot 'code-analyzer.json') -Raw
-    $subagentBody = @{
-        properties = @{
-            value = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($subagentSpec))
+    if (-not $githubConfigured) {
+        $oauthConfig = Invoke-RestMethod -Uri "$agentEndpoint/api/v2/github/oauth/config" -Method Get -Headers $headers
+        $oauthUrl = if ($oauthConfig.PSObject.Properties.Name -contains 'oAuthUrl') {
+            $oauthConfig.oAuthUrl
         }
-    } | ConvertTo-Json -Depth 10 -Compress
-    az rest --method Put --url "$previewBase/subagents/code-analyzer?api-version=2025-05-01-preview" --body $subagentBody --output none
-
-    $limitBody = @{
-        properties = @{
-            monthlyAgentUnitLimit = $MonthlyAgentUnitLimit
+        elseif ($oauthConfig.PSObject.Properties.Name -contains 'OAuthUrl') {
+            $oauthConfig.OAuthUrl
         }
-    } | ConvertTo-Json -Depth 5 -Compress
-    az rest --method Patch --url "$previewBase?api-version=2025-05-01-preview" --body $limitBody --output none
+        else {
+            $null
+        }
+        if ([string]::IsNullOrWhiteSpace($oauthUrl)) {
+            throw 'GitHub OAuth is not configured and the SRE Agent did not return an authorization URL.'
+        }
+        Write-Warning "Complete GitHub OAuth interactively, then rerun this script: $oauthUrl"
+    }
+    else {
+        $repositoryDefinition = Get-Content (Join-Path $configRoot 'repository.json') -Raw | ConvertFrom-Json
+        Invoke-DataPlanePut -Path '/api/v2/repos/grifols-sre-agent-demo' -Body $repositoryDefinition
+    }
 
-    $null = Invoke-RestMethod `
-        -Uri "$agentEndpoint/api/v2/repos/grifols-sre-agent-demo" `
-        -Method Get `
-        -Headers $headers
+    $subagentDefinition = Get-Content (Join-Path $configRoot 'code-analyzer.json') -Raw | ConvertFrom-Json
+    Invoke-DataPlanePut -Path '/api/v2/extendedAgent/agents/code-analyzer' -Body @{
+        name = 'code-analyzer'
+        type = 'ExtendedAgent'
+        tags = @('synthetic', 'cold-chain')
+        owner = ''
+        properties = @{
+            instructions = ($subagentDefinition.instructions -join "`n")
+            handoffDescription = $subagentDefinition.description
+            handoffs = @()
+            tools = @(
+                'SearchMemory',
+                'RunAzCliReadCommands',
+                'QueryLogAnalyticsByWorkspaceId',
+                'QueryAppInsightsByResourceId',
+                'FindConnectedGitHubRepo',
+                'GetIaCForGitHub'
+            )
+            mcpTools = @()
+            allowParallelToolCalls = $true
+            enableSkills = $true
+        }
+    }
+
+    $incidentFilterDefinition = Get-Content (Join-Path $configRoot 'cold-chain-sev2-review.json') -Raw |
+        ConvertFrom-Json
+    $incidentFilterDefinition.properties.azMonitorFilterSettings.targetResource =
+        "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup/providers/Microsoft.App/containerApps/$BackendAppName"
+    Invoke-DataPlanePut -Path '/api/v2/extendedAgent/incidentFilters/cold-chain-sev2-review' -Body $incidentFilterDefinition
+
+    $null = Invoke-RestMethod -Uri "$agentEndpoint/api/v2/extendedAgent/agents/code-analyzer" -Method Get -Headers $headers
+    $null = Invoke-RestMethod -Uri "$agentEndpoint/api/v2/extendedAgent/incidentFilters/cold-chain-sev2-review" -Method Get -Headers $headers
+    if ($githubConfigured) {
+        $null = Invoke-RestMethod -Uri "$agentEndpoint/api/v2/repos/grifols-sre-agent-demo" -Method Get -Headers $headers
+    }
     $configuredLimit = az rest `
         --method Get `
-        --url "$previewBase?api-version=2025-05-01-preview" `
+        --url "$agentBase?api-version=2026-01-01" `
         --query properties.monthlyAgentUnitLimit `
         --output tsv
     if ([int]$configuredLimit -ne $MonthlyAgentUnitLimit) {
@@ -121,9 +165,9 @@ try {
     }
 }
 finally {
+    $processPat = $null
     $headers.Authorization = $null
     $token = $null
 }
 
-Write-Host 'Declarative SRE Agent configuration and monthly unit limit verified.'
-Write-Warning 'Manual step remains: complete GitHub OAuth consent interactively in the Azure portal. No OAuth token or PAT is stored by this script.'
+Write-Host 'SRE Agent observability, subagent, Sev2 Review response handling, and monthly unit limit verified.'

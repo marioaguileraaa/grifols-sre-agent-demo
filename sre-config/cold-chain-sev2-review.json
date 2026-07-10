@@ -1,0 +1,29 @@
+{
+  "name": "cold-chain-sev2-review",
+  "type": "IncidentFilter",
+  "tags": ["synthetic", "sev2"],
+  "owner": "",
+  "properties": {
+    "incidentPlatform": "AzMonitor",
+    "impactedService": "",
+    "priorities": ["Sev2"],
+    "incidentType": "",
+    "alertId": "",
+    "titleContains": "cold-chain",
+    "titleContainsAll": [],
+    "titleContainsAny": [],
+    "titleNotContains": [],
+    "agentMode": "Review",
+    "handlingAgent": "code-analyzer",
+    "handlingAgents": null,
+    "maxAutomatedInvestigationAttempts": 3,
+    "deepInvestigationEnabled": true,
+    "mergeEnabled": true,
+    "mergeWindowHours": 1,
+    "isEnabled": true,
+    "azMonitorFilterSettings": {
+      "targetResourceType": "Microsoft.App/containerApps",
+      "targetResource": ""
+    }
+  }
+}
