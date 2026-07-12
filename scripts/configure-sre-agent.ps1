@@ -123,6 +123,33 @@ function Get-OptionalPropertyValue {
     return $property.Value
 }
 
+function Get-FirstOptionalPropertyValue {
+    param(
+        [AllowNull()]
+        [object] $InputObject,
+        [Parameter(Mandatory)]
+        [string[]] $PropertyNames,
+        [switch] $PropertiesFirst
+    )
+
+    $properties = Get-OptionalPropertyValue -InputObject $InputObject -PropertyName 'properties'
+    $candidateObjects = if ($PropertiesFirst) {
+        @($properties, $InputObject)
+    } else {
+        @($InputObject, $properties)
+    }
+
+    foreach ($candidateObject in $candidateObjects) {
+        foreach ($propertyName in $PropertyNames) {
+            $value = Get-OptionalPropertyValue -InputObject $candidateObject -PropertyName $propertyName
+            if ($null -ne $value) {
+                return $value
+            }
+        }
+    }
+    return $null
+}
+
 function Invoke-AgentApi {
     param(
         [Parameter(Mandatory)]
@@ -399,11 +426,11 @@ $triggerPayload = @{
 $triggerListResponse = Invoke-AgentApi -Method Get -Path '/api/v1/httptriggers' -Body $null
 $triggers = Get-ResponseItems -Response $triggerListResponse -PropertyNames @('value', 'values', 'triggers', 'items')
 $existingTrigger = $triggers | Where-Object {
-    ($_.name ?? $_.properties.name) -eq $triggerName
+    (Get-FirstOptionalPropertyValue -InputObject $_ -PropertyNames @('name')) -eq $triggerName
 } | Select-Object -First 1
 
 if ($null -ne $existingTrigger) {
-    $triggerId = $existingTrigger.id ?? $existingTrigger.triggerId ?? $existingTrigger.properties.id
+    $triggerId = Get-FirstOptionalPropertyValue -InputObject $existingTrigger -PropertyNames @('id', 'triggerId')
     if ([string]::IsNullOrWhiteSpace($triggerId)) {
         throw 'Existing HTTP trigger did not expose an ID.'
     }
@@ -411,7 +438,7 @@ if ($null -ne $existingTrigger) {
     $trigger = Invoke-AgentApi -Method Put -Path "/api/v1/httptriggers/$triggerId" -Body $triggerPayload
 } else {
     $trigger = Invoke-AgentApi -Method Post -Path '/api/v1/httptriggers/create' -Body $triggerPayload
-    $triggerId = $trigger.id ?? $trigger.triggerId ?? $trigger.properties.id
+    $triggerId = Get-FirstOptionalPropertyValue -InputObject $trigger -PropertyNames @('id', 'triggerId')
 }
 if ([string]::IsNullOrWhiteSpace($triggerId)) {
     throw 'HTTP trigger configuration did not return an ID.'
@@ -420,31 +447,16 @@ if ([string]::IsNullOrWhiteSpace($triggerId)) {
 $configuredTriggersResponse = Invoke-AgentApi -Method Get -Path '/api/v1/httptriggers' -Body $null
 $configuredTriggers = Get-ResponseItems -Response $configuredTriggersResponse -PropertyNames @('value', 'values', 'triggers', 'items')
 $configuredTrigger = $configuredTriggers | Where-Object {
-    $candidateProperties = Get-OptionalPropertyValue -InputObject $_ -PropertyName 'properties'
-    $candidateId = @(
-        Get-OptionalPropertyValue -InputObject $_ -PropertyName 'id'
-        Get-OptionalPropertyValue -InputObject $_ -PropertyName 'triggerId'
-        Get-OptionalPropertyValue -InputObject $candidateProperties -PropertyName 'id'
-        Get-OptionalPropertyValue -InputObject $candidateProperties -PropertyName 'triggerId'
-    ) | Where-Object { $null -ne $_ } | Select-Object -First 1
+    $candidateId = Get-FirstOptionalPropertyValue -InputObject $_ -PropertyNames @('id', 'triggerId')
     $candidateId -eq $triggerId
 } | Select-Object -First 1
 if ($null -eq $configuredTrigger) {
     throw 'HTTP trigger verification failed before bridge deployment.'
 }
 $configuredTriggerProperties = Get-OptionalPropertyValue -InputObject $configuredTrigger -PropertyName 'properties'
-$configuredTriggerMode = @(
-    Get-OptionalPropertyValue -InputObject $configuredTrigger -PropertyName 'agentMode'
-    Get-OptionalPropertyValue -InputObject $configuredTriggerProperties -PropertyName 'agentMode'
-) | Where-Object { $null -ne $_ } | Select-Object -First 1
-$configuredTriggerAgent = @(
-    Get-OptionalPropertyValue -InputObject $configuredTrigger -PropertyName 'agent'
-    Get-OptionalPropertyValue -InputObject $configuredTriggerProperties -PropertyName 'agent'
-) | Where-Object { $null -ne $_ } | Select-Object -First 1
-$configuredTriggerPrompt = @(
-    Get-OptionalPropertyValue -InputObject $configuredTrigger -PropertyName 'agentPrompt'
-    Get-OptionalPropertyValue -InputObject $configuredTriggerProperties -PropertyName 'agentPrompt'
-) | Where-Object { $null -ne $_ } | Select-Object -First 1
+$configuredTriggerMode = Get-FirstOptionalPropertyValue -InputObject $configuredTrigger -PropertyNames @('agentMode')
+$configuredTriggerAgent = Get-FirstOptionalPropertyValue -InputObject $configuredTrigger -PropertyNames @('agent')
+$configuredTriggerPrompt = Get-FirstOptionalPropertyValue -InputObject $configuredTrigger -PropertyNames @('agentPrompt')
 if ($configuredTriggerMode -ne 'Review' -or
     $configuredTriggerAgent -ne 'code-analyzer' -or
     [string]::IsNullOrWhiteSpace($configuredTriggerPrompt)) {
@@ -607,18 +619,18 @@ $verifiedFilter = Invoke-AgentApi -Method Get -Path '/api/v2/extendedAgent/incid
 $verifiedTriggersResponse = Invoke-AgentApi -Method Get -Path '/api/v1/httptriggers' -Body $null
 $verifiedTriggers = Get-ResponseItems -Response $verifiedTriggersResponse -PropertyNames @('value', 'values', 'triggers', 'items')
 $verifiedTrigger = $verifiedTriggers | Where-Object {
-    ($_.id ?? $_.triggerId ?? $_.properties.id) -eq $triggerId
+    (Get-FirstOptionalPropertyValue -InputObject $_ -PropertyNames @('id', 'triggerId')) -eq $triggerId
 } | Select-Object -First 1
 if ($null -eq $verifiedSubagent -or $null -eq $verifiedFilter -or $null -eq $verifiedTrigger) {
     throw 'Subagent, response plan, or HTTP trigger verification failed.'
 }
-$verifiedFilterMode = $verifiedFilter.properties.agentMode ?? $verifiedFilter.agentMode
+$verifiedFilterMode = Get-FirstOptionalPropertyValue -InputObject $verifiedFilter -PropertyNames @('agentMode') -PropertiesFirst
 if ($verifiedFilterMode -ne 'Review') {
     throw "Incident filter must remain in Review mode. Reported: '$verifiedFilterMode'."
 }
-$verifiedTriggerMode = $verifiedTrigger.agentMode ?? $verifiedTrigger.properties.agentMode
-$verifiedTriggerAgent = $verifiedTrigger.agent ?? $verifiedTrigger.properties.agent
-$verifiedTriggerPrompt = $verifiedTrigger.agentPrompt ?? $verifiedTrigger.properties.agentPrompt
+$verifiedTriggerMode = Get-FirstOptionalPropertyValue -InputObject $verifiedTrigger -PropertyNames @('agentMode')
+$verifiedTriggerAgent = Get-FirstOptionalPropertyValue -InputObject $verifiedTrigger -PropertyNames @('agent')
+$verifiedTriggerPrompt = Get-FirstOptionalPropertyValue -InputObject $verifiedTrigger -PropertyNames @('agentPrompt')
 if ($verifiedTriggerMode -ne 'Review' -or
     $verifiedTriggerAgent -ne 'code-analyzer' -or
     [string]::IsNullOrWhiteSpace($verifiedTriggerPrompt)) {
