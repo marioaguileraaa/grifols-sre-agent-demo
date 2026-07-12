@@ -134,7 +134,7 @@ El script:
 1. concede idempotentemente al usuario actual `SRE Agent Administrator` en el agente y espera propagación;
 2. aplica/verifica el límite mensual `1000` y confirma `AzMonitor`, `Review` y `Low`;
 3. configura autenticación GitHub con PAT de entorno o exige completar OAuth;
-4. hace PUT del repositorio `marioaguileraaa/grifols-sre-agent-demo`, rama `main`, y espera `cloneStatus=Ready`;
+4. reutiliza un repositorio `Ready` compatible; elimina/recrea solo índices incompatibles, no iniciados o fallidos, y espera `cloneStatus=Ready`;
 5. valida que los conectores ARM de Log Analytics y Application Insights usan `id-grifols-sre-v1`;
 6. crea/actualiza y verifica `code-analyzer` con herramientas Azure CLI de lectura, ayuda y escritura; `Review` + `Low` mantiene toda escritura sujeta a aprobación explícita;
 7. crea o actualiza idempotentemente el HTTP trigger con `agentPrompt`, `agent` y `agentMode=Review`;

@@ -122,7 +122,7 @@ function Get-OptionalPropertyValue {
 function Invoke-AgentApi {
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('Get', 'Post', 'Put')]
+        [ValidateSet('Delete', 'Get', 'Post', 'Put')]
         [string] $Method,
         [Parameter(Mandatory)]
         [string] $Path,
@@ -223,12 +223,68 @@ $repositoryBody = @{
         description = 'Synthetic Grifols Plasma Supply SRE demo source'
     }
 }
-Invoke-AgentApi -Method Put -Path "/api/v2/repos/$RepositoryName" -Body $repositoryBody | Out-Null
+$repositoriesResponse = Invoke-AgentApi -Method Get -Path '/api/v2/repos' -Body $null
+$repositories = Get-ResponseItems -Response $repositoriesResponse -PropertyNames @('value', 'values', 'repos', 'repositories', 'items')
+$existingRepository = $repositories | Where-Object {
+    $candidateProperties = Get-OptionalPropertyValue -InputObject $_ -PropertyName 'properties'
+    $candidateName = @(
+        Get-OptionalPropertyValue -InputObject $_ -PropertyName 'name'
+        Get-OptionalPropertyValue -InputObject $candidateProperties -PropertyName 'name'
+    ) | Where-Object { $null -ne $_ } | Select-Object -First 1
+    $candidateName -eq $RepositoryName
+} | Select-Object -First 1
+
+if ($null -ne $existingRepository) {
+    $existingRepository = Invoke-AgentApi -Method Get -Path "/api/v2/repos/$RepositoryName" -Body $null
+}
+$existingRepositoryProperties = Get-OptionalPropertyValue -InputObject $existingRepository -PropertyName 'properties'
+$existingRepositoryUrl = @(
+    Get-OptionalPropertyValue -InputObject $existingRepositoryProperties -PropertyName 'url'
+    Get-OptionalPropertyValue -InputObject $existingRepository -PropertyName 'url'
+) | Where-Object { $null -ne $_ } | Select-Object -First 1
+$existingRepositoryBranch = @(
+    Get-OptionalPropertyValue -InputObject $existingRepositoryProperties -PropertyName 'branch'
+    Get-OptionalPropertyValue -InputObject $existingRepository -PropertyName 'branch'
+) | Where-Object { $null -ne $_ } | Select-Object -First 1
+$existingRepositoryAuthConnector = @(
+    Get-OptionalPropertyValue -InputObject $existingRepositoryProperties -PropertyName 'authConnectorName'
+    Get-OptionalPropertyValue -InputObject $existingRepository -PropertyName 'authConnectorName'
+) | Where-Object { $null -ne $_ } | Select-Object -First 1
+$existingCloneStatus = @(
+    Get-OptionalPropertyValue -InputObject $existingRepositoryProperties -PropertyName 'cloneStatus'
+    Get-OptionalPropertyValue -InputObject $existingRepository -PropertyName 'cloneStatus'
+) | Where-Object { $null -ne $_ } | Select-Object -First 1
+$repositoryMatchesDesired = $null -ne $existingRepository `
+    -and $existingRepositoryUrl -eq $RepositoryUrl `
+    -and $existingRepositoryBranch -eq 'main' `
+    -and $existingRepositoryAuthConnector -eq 'github'
+$recreateCloneStatuses = @('NotStarted', 'Failed', 'Error', 'Canceled')
+
+if ($null -ne $existingRepository -and
+    (-not $repositoryMatchesDesired -or $existingCloneStatus -in $recreateCloneStatuses)) {
+    Invoke-AgentApi -Method Delete -Path "/api/v2/repos/$RepositoryName" -Body $null | Out-Null
+    Write-Host "Removed repository '$RepositoryName' because its source configuration or clone state requires recreation."
+    $existingRepository = $null
+}
+
+if ($null -eq $existingRepository) {
+    Invoke-AgentApi -Method Put -Path "/api/v2/repos/$RepositoryName" -Body $repositoryBody | Out-Null
+    Write-Host "Created repository '$RepositoryName' with the GitHub auth connector."
+} elseif ($existingCloneStatus -eq 'Ready') {
+    Write-Host "Reusing existing Ready repository '$RepositoryName'."
+} else {
+    Write-Host "Repository '$RepositoryName' already has the desired source configuration; waiting for cloneStatus '$existingCloneStatus' to complete."
+}
 
 $repoDeadline = (Get-Date).AddMinutes(10)
+$cloneStatus = $null
 do {
     $repoStatus = Invoke-AgentApi -Method Get -Path "/api/v2/repos/$RepositoryName" -Body $null
-    $cloneStatus = $repoStatus.properties.cloneStatus ?? $repoStatus.cloneStatus
+    $repoStatusProperties = Get-OptionalPropertyValue -InputObject $repoStatus -PropertyName 'properties'
+    $cloneStatus = @(
+        Get-OptionalPropertyValue -InputObject $repoStatusProperties -PropertyName 'cloneStatus'
+        Get-OptionalPropertyValue -InputObject $repoStatus -PropertyName 'cloneStatus'
+    ) | Where-Object { $null -ne $_ } | Select-Object -First 1
     if ($cloneStatus -eq 'Ready') {
         break
     }
@@ -364,7 +420,12 @@ if ([int]$verifiedAgent.properties.monthlyAgentUnitLimit -ne $MonthlyAgentUnitLi
 }
 
 $verifiedRepo = Invoke-AgentApi -Method Get -Path "/api/v2/repos/$RepositoryName" -Body $null
-if (($verifiedRepo.properties.cloneStatus ?? $verifiedRepo.cloneStatus) -ne 'Ready') {
+$verifiedRepoProperties = Get-OptionalPropertyValue -InputObject $verifiedRepo -PropertyName 'properties'
+$verifiedCloneStatus = @(
+    Get-OptionalPropertyValue -InputObject $verifiedRepoProperties -PropertyName 'cloneStatus'
+    Get-OptionalPropertyValue -InputObject $verifiedRepo -PropertyName 'cloneStatus'
+) | Where-Object { $null -ne $_ } | Select-Object -First 1
+if ($verifiedCloneStatus -ne 'Ready') {
     throw 'Repository is not Ready after configuration.'
 }
 $verifiedSubagent = Invoke-AgentApi -Method Get -Path '/api/v2/extendedAgent/agents/code-analyzer' -Body $null
