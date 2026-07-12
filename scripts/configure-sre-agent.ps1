@@ -79,6 +79,7 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($agent.properties.agent
 
 $endpoint = $agent.properties.agentEndpoint.TrimEnd('/')
 $script:dataPlaneHeaders = $null
+$script:agentHttpClient = $null
 
 function Get-ResponseItems {
     param(
@@ -129,17 +130,51 @@ function Invoke-AgentApi {
         [object] $Body
     )
 
-    $parameters = @{
-        Method = $Method
-        Uri = "$endpoint$Path"
-        Headers = $script:dataPlaneHeaders
-        MaximumRedirection = 0
+    if ($null -eq $script:agentHttpClient) {
+        $handler = [System.Net.Http.HttpClientHandler]::new()
+        $handler.AllowAutoRedirect = $false
+        $script:agentHttpClient = [System.Net.Http.HttpClient]::new($handler, $true)
     }
-    if ($null -ne $Body) {
-        $parameters.ContentType = 'application/json'
-        $parameters.Body = $Body | ConvertTo-Json -Depth 30
+
+    $request = [System.Net.Http.HttpRequestMessage]::new(
+        [System.Net.Http.HttpMethod]::new($Method.ToUpperInvariant()),
+        "$endpoint$Path"
+    )
+    $response = $null
+    try {
+        foreach ($header in $script:dataPlaneHeaders.GetEnumerator()) {
+            if ($header.Key -eq 'Content-Type') {
+                continue
+            }
+            if (-not $request.Headers.TryAddWithoutValidation([string] $header.Key, [string] $header.Value)) {
+                throw "Unable to add SRE Agent API request header '$($header.Key)'."
+            }
+        }
+        if ($null -ne $Body) {
+            $jsonBody = $Body | ConvertTo-Json -Depth 30
+            $request.Content = [System.Net.Http.StringContent]::new(
+                $jsonBody,
+                [System.Text.Encoding]::UTF8,
+                'application/json'
+            )
+        }
+
+        $response = $script:agentHttpClient.Send($request)
+        $response.EnsureSuccessStatusCode() | Out-Null
+        if ($null -eq $response.Content) {
+            return $null
+        }
+        $responseBody = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        if ([string]::IsNullOrWhiteSpace($responseBody)) {
+            return $null
+        }
+        return $responseBody | ConvertFrom-Json
+    } finally {
+        if ($null -ne $response) {
+            $response.Dispose()
+        }
+        $request.Dispose()
     }
-    Invoke-RestMethod @parameters
 }
 
 $dataPlaneDeadline = (Get-Date).AddMinutes(10)
