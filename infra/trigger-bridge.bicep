@@ -41,7 +41,11 @@ resource bridge 'Microsoft.Logic/workflows@2019-05-01' = {
     definition: {
       '$schema': 'https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#'
       contentVersion: '1.0.0.0'
-      parameters: {}
+      parameters: {
+        protectedTriggerUrl: {
+          type: 'SecureString'
+        }
+      }
       triggers: {
         manual: {
           type: 'Request'
@@ -57,7 +61,7 @@ resource bridge 'Microsoft.Logic/workflows@2019-05-01' = {
         Forward_to_SRE_Agent: {
           type: 'Http'
           inputs: {
-            uri: protectedTriggerUrl
+            uri: '@parameters(\'protectedTriggerUrl\')'
             method: 'POST'
             headers: {
               'Content-Type': 'application/json'
@@ -69,6 +73,14 @@ resource bridge 'Microsoft.Logic/workflows@2019-05-01' = {
             }
             retryPolicy: {
               type: 'none'
+            }
+          }
+          operationOptions: 'DisableAsyncPattern'
+          runtimeConfiguration: {
+            secureData: {
+              properties: [
+                'inputs'
+              ]
             }
           }
           runAfter: {}
@@ -128,6 +140,11 @@ resource bridge 'Microsoft.Logic/workflows@2019-05-01' = {
         }
       }
       outputs: {}
+    }
+    parameters: {
+      protectedTriggerUrl: {
+        value: protectedTriggerUrl
+      }
     }
   }
 }
