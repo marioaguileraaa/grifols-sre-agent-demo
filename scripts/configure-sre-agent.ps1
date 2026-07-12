@@ -288,9 +288,11 @@ $existingCloneStatus = @(
     Get-OptionalPropertyValue -InputObject $existingRepositoryProperties -PropertyName 'cloneStatus'
     Get-OptionalPropertyValue -InputObject $existingRepository -PropertyName 'cloneStatus'
 ) | Where-Object { $null -ne $_ } | Select-Object -First 1
+$existingRepositoryBranchMatchesDesired = [string]::IsNullOrWhiteSpace($existingRepositoryBranch) `
+    -or $existingRepositoryBranch -eq 'main'
 $repositoryMatchesDesired = $null -ne $existingRepository `
     -and $existingRepositoryUrl -eq $RepositoryUrl `
-    -and $existingRepositoryBranch -eq 'main' `
+    -and $existingRepositoryBranchMatchesDesired `
     -and $existingRepositoryType -eq 'GitHub'
 
 if ($null -eq $existingRepository) {
