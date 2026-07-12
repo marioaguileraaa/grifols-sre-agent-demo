@@ -133,6 +133,7 @@ function Invoke-AgentApi {
         Method = $Method
         Uri = "$endpoint$Path"
         Headers = $script:dataPlaneHeaders
+        MaximumRedirection = 0
     }
     if ($null -ne $Body) {
         $parameters.ContentType = 'application/json'
@@ -217,6 +218,7 @@ $repositoryBody = @{
     properties = @{
         url = $RepositoryUrl
         type = 'GitHub'
+        authConnectorName = 'github'
         branch = 'main'
         description = 'Synthetic Grifols Plasma Supply SRE demo source'
     }
