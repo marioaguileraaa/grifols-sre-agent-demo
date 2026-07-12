@@ -15,8 +15,11 @@ param(
 . "$PSScriptRoot\AzureDemo.Common.ps1"
 
 $sreAdministratorRoleId = 'e79298df-d852-4c6d-84f9-5d13249d1e55'
+$sreStandardUserRoleId = '2d84a65a-63b2-4343-bbb6-31105d857bc1'
 $previewApiVersion = '2025-05-01-preview'
 $triggerName = 'grifols-controlled-issue'
+$triggerBridgeName = 'logic-grifols-sre-trigger-v1'
+$triggerBridgeDeploymentName = 'grifols-sre-trigger-bridge'
 $agentResourceId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.App/agents/$AgentName"
 $agentArmUrl = "https://management.azure.com${agentResourceId}"
 
@@ -30,7 +33,6 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($signedInUserId)) {
 $existingAdminAssignments = az role assignment list `
     --assignee-object-id $signedInUserId `
     --scope $agentResourceId `
-    --all `
     --fill-principal-name false `
     --output json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) {
@@ -80,6 +82,7 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($agent.properties.agent
 
 $endpoint = $agent.properties.agentEndpoint.TrimEnd('/')
 $script:dataPlaneHeaders = $null
+$script:agentHttpClient = $null
 
 function Get-ResponseItems {
     param(
@@ -102,6 +105,24 @@ function Get-ResponseItems {
     return @($Response)
 }
 
+function Get-OptionalPropertyValue {
+    param(
+        [AllowNull()]
+        [object] $InputObject,
+        [Parameter(Mandatory)]
+        [string] $PropertyName
+    )
+
+    if ($null -eq $InputObject) {
+        return $null
+    }
+    $property = $InputObject.PSObject.Properties[$PropertyName]
+    if ($null -eq $property) {
+        return $null
+    }
+    return $property.Value
+}
+
 function Invoke-AgentApi {
     param(
         [Parameter(Mandatory)]
@@ -112,16 +133,51 @@ function Invoke-AgentApi {
         [object] $Body
     )
 
-    $parameters = @{
-        Method = $Method
-        Uri = "$endpoint$Path"
-        Headers = $script:dataPlaneHeaders
+    if ($null -eq $script:agentHttpClient) {
+        $handler = [System.Net.Http.HttpClientHandler]::new()
+        $handler.AllowAutoRedirect = $false
+        $script:agentHttpClient = [System.Net.Http.HttpClient]::new($handler, $true)
     }
-    if ($null -ne $Body) {
-        $parameters.ContentType = 'application/json'
-        $parameters.Body = $Body | ConvertTo-Json -Depth 30
+
+    $request = [System.Net.Http.HttpRequestMessage]::new(
+        [System.Net.Http.HttpMethod]::new($Method.ToUpperInvariant()),
+        "$endpoint$Path"
+    )
+    $response = $null
+    try {
+        foreach ($header in $script:dataPlaneHeaders.GetEnumerator()) {
+            if ($header.Key -eq 'Content-Type') {
+                continue
+            }
+            if (-not $request.Headers.TryAddWithoutValidation([string] $header.Key, [string] $header.Value)) {
+                throw "Unable to add SRE Agent API request header '$($header.Key)'."
+            }
+        }
+        if ($null -ne $Body) {
+            $jsonBody = $Body | ConvertTo-Json -Depth 30
+            $request.Content = [System.Net.Http.StringContent]::new(
+                $jsonBody,
+                [System.Text.Encoding]::UTF8,
+                'application/json'
+            )
+        }
+
+        $response = $script:agentHttpClient.Send($request)
+        $response.EnsureSuccessStatusCode() | Out-Null
+        if ($null -eq $response.Content) {
+            return $null
+        }
+        $responseBody = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        if ([string]::IsNullOrWhiteSpace($responseBody)) {
+            return $null
+        }
+        return $responseBody | ConvertFrom-Json
+    } finally {
+        if ($null -ne $response) {
+            $response.Dispose()
+        }
+        $request.Dispose()
     }
-    Invoke-RestMethod @parameters
 }
 
 $dataPlaneDeadline = (Get-Date).AddMinutes(10)
@@ -155,13 +211,27 @@ if ($null -ne $lastDataPlaneError) {
 $domainsResponse = Invoke-AgentApi -Method Get -Path '/api/v2/github/domains' -Body $null
 $domains = Get-ResponseItems -Response $domainsResponse -PropertyNames @('value', 'values', 'domains', 'items')
 $githubDomain = $domains | Where-Object {
-    ($_.name ?? $_.domain ?? $_.properties.domain) -in @('github_com', 'github.com')
+    $domainProperties = Get-OptionalPropertyValue -InputObject $_ -PropertyName 'properties'
+    $domainName = @(
+        Get-OptionalPropertyValue -InputObject $_ -PropertyName 'name'
+        Get-OptionalPropertyValue -InputObject $_ -PropertyName 'domain'
+        Get-OptionalPropertyValue -InputObject $domainProperties -PropertyName 'domain'
+    ) | Where-Object { $null -ne $_ } | Select-Object -First 1
+    $domainName -in @('github_com', 'github.com')
 } | Select-Object -First 1
-$githubDomainStatus = $githubDomain.properties.status `
-    ?? $githubDomain.properties.connectionStatus `
-    ?? $githubDomain.status `
-    ?? $githubDomain.connectionStatus
-$domainReady = $null -ne $githubDomain -and $githubDomainStatus -in @('Connected', 'Ready', 'Authenticated', 'Succeeded')
+$githubDomainProperties = Get-OptionalPropertyValue -InputObject $githubDomain -PropertyName 'properties'
+$githubDomainStatus = @(
+    Get-OptionalPropertyValue -InputObject $githubDomainProperties -PropertyName 'status'
+    Get-OptionalPropertyValue -InputObject $githubDomainProperties -PropertyName 'connectionStatus'
+    Get-OptionalPropertyValue -InputObject $githubDomain -PropertyName 'status'
+    Get-OptionalPropertyValue -InputObject $githubDomain -PropertyName 'connectionStatus'
+) | Where-Object { $null -ne $_ } | Select-Object -First 1
+$githubDomainIsHealthy = Get-OptionalPropertyValue -InputObject $githubDomain -PropertyName 'isHealthy'
+$domainReady = if ($null -ne $githubDomainIsHealthy) {
+    $githubDomainIsHealthy -eq $true
+} else {
+    $null -ne $githubDomain -and $githubDomainStatus -in @('Connected', 'Ready', 'Authenticated', 'Succeeded')
+}
 
 if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_PAT)) {
     Invoke-AgentApi -Method Put -Path '/api/v2/github/domains/github_com' -Body @{
@@ -173,8 +243,7 @@ if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_PAT)) {
 } elseif (-not $domainReady) {
     $oauth = Invoke-AgentApi -Method Get -Path '/api/v2/github/oauth/config' -Body $null
     Write-Host 'INCOMPLETE: GitHub authentication is required before source indexing.'
-    Write-Host 'Complete OAuth in a browser, then rerun this script:'
-    Write-Host $oauth.oAuthUrl
+    Write-Host 'Complete OAuth through the Azure SRE Agent portal, then rerun this script.'
     throw 'INCOMPLETE: no authenticated GitHub domain or GITHUB_PAT was available.'
 } else {
     Write-Host "Using existing authenticated GitHub domain. Status=$githubDomainStatus"
@@ -190,12 +259,64 @@ $repositoryBody = @{
         description = 'Synthetic Grifols Plasma Supply SRE demo source'
     }
 }
-Invoke-AgentApi -Method Put -Path "/api/v2/repos/$RepositoryName" -Body $repositoryBody | Out-Null
+$repositoriesResponse = Invoke-AgentApi -Method Get -Path '/api/v2/repos' -Body $null
+$repositories = Get-ResponseItems -Response $repositoriesResponse -PropertyNames @('value', 'values', 'repos', 'repositories', 'items')
+$existingRepository = $repositories | Where-Object {
+    $candidateProperties = Get-OptionalPropertyValue -InputObject $_ -PropertyName 'properties'
+    $candidateName = @(
+        Get-OptionalPropertyValue -InputObject $_ -PropertyName 'name'
+        Get-OptionalPropertyValue -InputObject $candidateProperties -PropertyName 'name'
+    ) | Where-Object { $null -ne $_ } | Select-Object -First 1
+    $candidateName -eq $RepositoryName
+} | Select-Object -First 1
+
+if ($null -ne $existingRepository) {
+    $existingRepository = Invoke-AgentApi -Method Get -Path "/api/v2/repos/$RepositoryName" -Body $null
+}
+$existingRepositoryProperties = Get-OptionalPropertyValue -InputObject $existingRepository -PropertyName 'properties'
+$existingRepositoryUrl = @(
+    Get-OptionalPropertyValue -InputObject $existingRepositoryProperties -PropertyName 'url'
+    Get-OptionalPropertyValue -InputObject $existingRepository -PropertyName 'url'
+) | Where-Object { $null -ne $_ } | Select-Object -First 1
+$existingRepositoryBranch = @(
+    Get-OptionalPropertyValue -InputObject $existingRepositoryProperties -PropertyName 'branch'
+    Get-OptionalPropertyValue -InputObject $existingRepository -PropertyName 'branch'
+) | Where-Object { $null -ne $_ } | Select-Object -First 1
+$existingRepositoryType = @(
+    Get-OptionalPropertyValue -InputObject $existingRepositoryProperties -PropertyName 'type'
+    Get-OptionalPropertyValue -InputObject $existingRepository -PropertyName 'type'
+) | Where-Object { $null -ne $_ } | Select-Object -First 1
+$existingCloneStatus = @(
+    Get-OptionalPropertyValue -InputObject $existingRepositoryProperties -PropertyName 'cloneStatus'
+    Get-OptionalPropertyValue -InputObject $existingRepository -PropertyName 'cloneStatus'
+) | Where-Object { $null -ne $_ } | Select-Object -First 1
+$existingRepositoryBranchMatchesDesired = [string]::IsNullOrWhiteSpace($existingRepositoryBranch) `
+    -or $existingRepositoryBranch -eq 'main'
+$repositoryMatchesDesired = $null -ne $existingRepository `
+    -and $existingRepositoryUrl -eq $RepositoryUrl `
+    -and $existingRepositoryBranchMatchesDesired `
+    -and $existingRepositoryType -eq 'GitHub'
+
+if ($null -eq $existingRepository) {
+    Invoke-AgentApi -Method Put -Path "/api/v2/repos/$RepositoryName" -Body $repositoryBody | Out-Null
+    Write-Host "Created repository '$RepositoryName'."
+} elseif (-not $repositoryMatchesDesired) {
+    throw "Repository '$RepositoryName' already exists with a different URL, type, or branch. Refusing destructive replacement."
+} elseif ($existingCloneStatus -eq 'Ready') {
+    Write-Host "Reusing existing Ready repository '$RepositoryName'."
+} else {
+    Write-Host "Repository '$RepositoryName' already has the desired source configuration; waiting for cloneStatus '$existingCloneStatus' to complete."
+}
 
 $repoDeadline = (Get-Date).AddMinutes(10)
+$cloneStatus = $null
 do {
     $repoStatus = Invoke-AgentApi -Method Get -Path "/api/v2/repos/$RepositoryName" -Body $null
-    $cloneStatus = $repoStatus.properties.cloneStatus ?? $repoStatus.cloneStatus
+    $repoStatusProperties = Get-OptionalPropertyValue -InputObject $repoStatus -PropertyName 'properties'
+    $cloneStatus = @(
+        Get-OptionalPropertyValue -InputObject $repoStatusProperties -PropertyName 'cloneStatus'
+        Get-OptionalPropertyValue -InputObject $repoStatus -PropertyName 'cloneStatus'
+    ) | Where-Object { $null -ne $_ } | Select-Object -First 1
     if ($cloneStatus -eq 'Ready') {
         break
     }
@@ -296,21 +417,163 @@ if ([string]::IsNullOrWhiteSpace($triggerId)) {
     throw 'HTTP trigger configuration did not return an ID.'
 }
 
-$triggerUrl = $trigger.triggerUrl `
-    ?? $trigger.webhookUrl `
-    ?? $existingTrigger.triggerUrl `
-    ?? $existingTrigger.webhookUrl `
-    ?? "$endpoint/api/v1/httptriggers/trigger/$triggerId"
+$configuredTriggersResponse = Invoke-AgentApi -Method Get -Path '/api/v1/httptriggers' -Body $null
+$configuredTriggers = Get-ResponseItems -Response $configuredTriggersResponse -PropertyNames @('value', 'values', 'triggers', 'items')
+$configuredTrigger = $configuredTriggers | Where-Object {
+    $candidateProperties = Get-OptionalPropertyValue -InputObject $_ -PropertyName 'properties'
+    $candidateId = @(
+        Get-OptionalPropertyValue -InputObject $_ -PropertyName 'id'
+        Get-OptionalPropertyValue -InputObject $_ -PropertyName 'triggerId'
+        Get-OptionalPropertyValue -InputObject $candidateProperties -PropertyName 'id'
+        Get-OptionalPropertyValue -InputObject $candidateProperties -PropertyName 'triggerId'
+    ) | Where-Object { $null -ne $_ } | Select-Object -First 1
+    $candidateId -eq $triggerId
+} | Select-Object -First 1
+if ($null -eq $configuredTrigger) {
+    throw 'HTTP trigger verification failed before bridge deployment.'
+}
+$configuredTriggerProperties = Get-OptionalPropertyValue -InputObject $configuredTrigger -PropertyName 'properties'
+$configuredTriggerMode = @(
+    Get-OptionalPropertyValue -InputObject $configuredTrigger -PropertyName 'agentMode'
+    Get-OptionalPropertyValue -InputObject $configuredTriggerProperties -PropertyName 'agentMode'
+) | Where-Object { $null -ne $_ } | Select-Object -First 1
+$configuredTriggerAgent = @(
+    Get-OptionalPropertyValue -InputObject $configuredTrigger -PropertyName 'agent'
+    Get-OptionalPropertyValue -InputObject $configuredTriggerProperties -PropertyName 'agent'
+) | Where-Object { $null -ne $_ } | Select-Object -First 1
+$configuredTriggerPrompt = @(
+    Get-OptionalPropertyValue -InputObject $configuredTrigger -PropertyName 'agentPrompt'
+    Get-OptionalPropertyValue -InputObject $configuredTriggerProperties -PropertyName 'agentPrompt'
+) | Where-Object { $null -ne $_ } | Select-Object -First 1
+if ($configuredTriggerMode -ne 'Review' -or
+    $configuredTriggerAgent -ne 'code-analyzer' -or
+    [string]::IsNullOrWhiteSpace($configuredTriggerPrompt)) {
+    throw 'HTTP trigger verification did not preserve Review mode, code-analyzer, and agentPrompt.'
+}
+
+$triggerProperties = Get-OptionalPropertyValue -InputObject $trigger -PropertyName 'properties'
+$existingTriggerProperties = Get-OptionalPropertyValue -InputObject $existingTrigger -PropertyName 'properties'
+$triggerUrl = @(
+    Get-OptionalPropertyValue -InputObject $trigger -PropertyName 'triggerUrl'
+    Get-OptionalPropertyValue -InputObject $trigger -PropertyName 'webhookUrl'
+    Get-OptionalPropertyValue -InputObject $triggerProperties -PropertyName 'triggerUrl'
+    Get-OptionalPropertyValue -InputObject $triggerProperties -PropertyName 'webhookUrl'
+    Get-OptionalPropertyValue -InputObject $configuredTrigger -PropertyName 'triggerUrl'
+    Get-OptionalPropertyValue -InputObject $configuredTrigger -PropertyName 'webhookUrl'
+    Get-OptionalPropertyValue -InputObject $configuredTriggerProperties -PropertyName 'triggerUrl'
+    Get-OptionalPropertyValue -InputObject $configuredTriggerProperties -PropertyName 'webhookUrl'
+    Get-OptionalPropertyValue -InputObject $existingTrigger -PropertyName 'triggerUrl'
+    Get-OptionalPropertyValue -InputObject $existingTrigger -PropertyName 'webhookUrl'
+    Get-OptionalPropertyValue -InputObject $existingTriggerProperties -PropertyName 'triggerUrl'
+    Get-OptionalPropertyValue -InputObject $existingTriggerProperties -PropertyName 'webhookUrl'
+) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1
+if ([string]::IsNullOrWhiteSpace($triggerUrl)) {
+    $triggerUrl = "$endpoint/api/v1/httptriggers/trigger/$triggerId"
+}
+
+$repoRoot = Split-Path $PSScriptRoot -Parent
+$triggerBridgeTemplate = Join-Path $repoRoot 'infra\trigger-bridge.bicep'
+if (-not (Test-Path -LiteralPath $triggerBridgeTemplate -PathType Leaf)) {
+    throw 'The Logic App trigger bridge Bicep module was not found.'
+}
+$bridgeLocation = Get-OptionalPropertyValue -InputObject $agent -PropertyName 'location'
+if ([string]::IsNullOrWhiteSpace($bridgeLocation)) {
+    throw 'The SRE Agent ARM resource did not expose a location for the trigger bridge.'
+}
+$null = az deployment group create `
+    --subscription $SubscriptionId `
+    --resource-group $ResourceGroupName `
+    --name $triggerBridgeDeploymentName `
+    --template-file $triggerBridgeTemplate `
+    --parameters `
+        "location=$bridgeLocation" `
+        "logicAppName=$triggerBridgeName" `
+        "agentName=$AgentName" `
+        "sreTriggerUrl=$triggerUrl" `
+    --output none 2>&1
+if ($LASTEXITCODE -ne 0) {
+    throw 'Unable to deploy the authenticated Logic App trigger bridge.'
+}
+
+$triggerBridgeResourceId = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Logic/workflows/$triggerBridgeName"
+$triggerBridge = az rest `
+    --method get `
+    --url "https://management.azure.com${triggerBridgeResourceId}?api-version=2019-05-01" `
+    --output json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) {
+    throw 'Unable to verify the Logic App trigger bridge.'
+}
+$triggerBridgeIdentity = Get-OptionalPropertyValue -InputObject $triggerBridge -PropertyName 'identity'
+$triggerBridgePrincipalId = Get-OptionalPropertyValue -InputObject $triggerBridgeIdentity -PropertyName 'principalId'
+$triggerBridgeProperties = Get-OptionalPropertyValue -InputObject $triggerBridge -PropertyName 'properties'
+$triggerBridgeState = Get-OptionalPropertyValue -InputObject $triggerBridgeProperties -PropertyName 'state'
+$triggerBridgeDefinition = Get-OptionalPropertyValue -InputObject $triggerBridgeProperties -PropertyName 'definition'
+$triggerBridgeActions = Get-OptionalPropertyValue -InputObject $triggerBridgeDefinition -PropertyName 'actions'
+$triggerBridgeForwardAction = Get-OptionalPropertyValue -InputObject $triggerBridgeActions -PropertyName 'forward_to_sre_agent'
+$triggerBridgeForwardInputs = Get-OptionalPropertyValue -InputObject $triggerBridgeForwardAction -PropertyName 'inputs'
+$triggerBridgeAuthentication = Get-OptionalPropertyValue -InputObject $triggerBridgeForwardInputs -PropertyName 'authentication'
+$triggerBridgeAuthType = Get-OptionalPropertyValue -InputObject $triggerBridgeAuthentication -PropertyName 'type'
+$triggerBridgeAudience = Get-OptionalPropertyValue -InputObject $triggerBridgeAuthentication -PropertyName 'audience'
+$triggerBridgeResponseAction = Get-OptionalPropertyValue -InputObject $triggerBridgeActions -PropertyName 'respond_to_caller'
+if ([string]::IsNullOrWhiteSpace($triggerBridgePrincipalId) -or
+    $triggerBridgeState -ne 'Enabled' -or
+    $triggerBridgeAuthType -ne 'ManagedServiceIdentity' -or
+    $triggerBridgeAudience -ne 'https://azuresre.dev' -or
+    $null -eq $triggerBridgeResponseAction) {
+    throw 'The Logic App trigger bridge identity, authentication, response, or state verification failed.'
+}
+
+$bridgeRoleDeadline = (Get-Date).AddMinutes(5)
+$bridgeHasStandardUserRole = $false
+do {
+    $bridgeRoleAssignments = az role assignment list `
+        --assignee-object-id $triggerBridgePrincipalId `
+        --scope $agentResourceId `
+        --role $sreStandardUserRoleId `
+        --fill-principal-name false `
+        --output json | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Unable to inspect the Logic App SRE Agent Standard User assignment.'
+    }
+    $bridgeHasStandardUserRole = $null -ne ($bridgeRoleAssignments | Where-Object {
+        $_.roleDefinitionId -match "/$sreStandardUserRoleId$"
+    } | Select-Object -First 1)
+    if ($bridgeHasStandardUserRole) {
+        break
+    }
+    Start-Sleep -Seconds 10
+} while ((Get-Date) -lt $bridgeRoleDeadline)
+if (-not $bridgeHasStandardUserRole) {
+    throw 'Logic App SRE Agent Standard User assignment did not propagate within five minutes.'
+}
+
+$triggerBridgeCallbackUrl = az rest `
+    --method post `
+    --url "https://management.azure.com${triggerBridgeResourceId}/triggers/incoming_webhook/listCallbackUrl?api-version=2019-05-01" `
+    --query value `
+    --output tsv
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($triggerBridgeCallbackUrl)) {
+    throw 'Unable to obtain the Logic App trigger callback URL.'
+}
+$triggerBridgeCallbackUri = $null
+if (-not [Uri]::TryCreate($triggerBridgeCallbackUrl, [UriKind]::Absolute, [ref] $triggerBridgeCallbackUri) -or
+    $triggerBridgeCallbackUri.Scheme -ne 'https' -or
+    $triggerBridgeCallbackUri.Query -notmatch '(^\?|&)sig=') {
+    throw 'The Logic App trigger callback URL was invalid.'
+}
 
 if ($SetGitHubSecret) {
-    $triggerUrl | gh secret set SRE_TRIGGER_URL --repo $GitHubRepository
+    $triggerBridgeCallbackUrl | gh secret set SRE_TRIGGER_URL --repo $GitHubRepository
     if ($LASTEXITCODE -ne 0) {
         throw 'Unable to set GitHub secret SRE_TRIGGER_URL.'
     }
-    Write-Host "GitHub secret SRE_TRIGGER_URL set for $GitHubRepository without printing the URL."
+    Write-Host "GitHub secret SRE_TRIGGER_URL set to the authenticated bridge callback for $GitHubRepository without printing the URL."
 } else {
-    throw 'INCOMPLETE: SRE_TRIGGER_URL was not set. Rerun with -SetGitHubSecret so the trigger URL is piped securely to GitHub without being printed.'
+    throw 'INCOMPLETE: SRE_TRIGGER_URL was not set. Rerun with -SetGitHubSecret so the bridge callback is piped securely to GitHub without being printed.'
 }
+$triggerBridgeCallbackUrl = $null
+$triggerBridgeCallbackUri = $null
+$triggerUrl = $null
 
 $verifiedAgent = az rest `
     --method get `
@@ -331,7 +594,12 @@ if ([int]$verifiedAgent.properties.monthlyAgentUnitLimit -ne $MonthlyAgentUnitLi
 }
 
 $verifiedRepo = Invoke-AgentApi -Method Get -Path "/api/v2/repos/$RepositoryName" -Body $null
-if (($verifiedRepo.properties.cloneStatus ?? $verifiedRepo.cloneStatus) -ne 'Ready') {
+$verifiedRepoProperties = Get-OptionalPropertyValue -InputObject $verifiedRepo -PropertyName 'properties'
+$verifiedCloneStatus = @(
+    Get-OptionalPropertyValue -InputObject $verifiedRepoProperties -PropertyName 'cloneStatus'
+    Get-OptionalPropertyValue -InputObject $verifiedRepo -PropertyName 'cloneStatus'
+) | Where-Object { $null -ne $_ } | Select-Object -First 1
+if ($verifiedCloneStatus -ne 'Ready') {
     throw 'Repository is not Ready after configuration.'
 }
 $verifiedSubagent = Invoke-AgentApi -Method Get -Path '/api/v2/extendedAgent/agents/code-analyzer' -Body $null
@@ -357,4 +625,19 @@ if ($verifiedTriggerMode -ne 'Review' -or
     throw 'HTTP trigger did not preserve agentMode=Review, agent=code-analyzer, and agentPrompt.'
 }
 
-Write-Host "SRE Agent configuration verified: repo=Ready, connectors=UAMI, incident=AzMonitor, mode=Review, access=Low, monthlyLimit=$MonthlyAgentUnitLimit."
+$verifiedTriggerBridge = az rest `
+    --method get `
+    --url "https://management.azure.com${triggerBridgeResourceId}?api-version=2019-05-01" `
+    --output json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) {
+    throw 'Unable to complete final Logic App trigger bridge verification.'
+}
+$verifiedTriggerBridgeIdentity = Get-OptionalPropertyValue -InputObject $verifiedTriggerBridge -PropertyName 'identity'
+$verifiedTriggerBridgePrincipalId = Get-OptionalPropertyValue -InputObject $verifiedTriggerBridgeIdentity -PropertyName 'principalId'
+$verifiedTriggerBridgeProperties = Get-OptionalPropertyValue -InputObject $verifiedTriggerBridge -PropertyName 'properties'
+$verifiedTriggerBridgeState = Get-OptionalPropertyValue -InputObject $verifiedTriggerBridgeProperties -PropertyName 'state'
+if ($verifiedTriggerBridgePrincipalId -ne $triggerBridgePrincipalId -or $verifiedTriggerBridgeState -ne 'Enabled') {
+    throw 'Final Logic App trigger bridge identity or state verification failed.'
+}
+
+Write-Host "SRE Agent configuration verified: repo=Ready, connectors=UAMI, bridge=MSI/StandardUser, incident=AzMonitor, mode=Review, access=Low, monthlyLimit=$MonthlyAgentUnitLimit."
