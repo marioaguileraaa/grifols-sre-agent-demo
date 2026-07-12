@@ -125,24 +125,16 @@ ninguna escritura se ejecuta sin aprobación explícita.
 
 ## 5. Trigger controlado
 
-El workflow solo usa el secreto `SRE_TRIGGER_URL`, sin Azure login, OIDC ni header
-`Authorization`. El secreto apunta al callback firmado de la Logic App Consumption
-`logic-grifols-sre-trigger-v1`, no directamente a `/api/v1/httptriggers/trigger/{id}`:
-el trigger de Azure SRE Agent exige bearer token.
-
-La identidad administrada del puente tiene únicamente `SRE Agent Standard User` sobre
-el recurso del agente. Reenvía el cuerpo JSON original con audience
-`https://azuresre.dev` y propaga status, body y content type; una respuesta downstream
-fallida no se convierte en éxito.
+El workflow solo usa el secreto `SRE_TRIGGER_URL` apuntando al webhook público
+`/api/v1/httptriggers/trigger/{id}`. No usa Azure login ni header de autenticación.
 La configuración completa requiere:
 
 ```powershell
 .\scripts\configure-sre-agent.ps1 -SetGitHubSecret
 ```
 
-Sin `-SetGitHubSecret`, el script termina como `INCOMPLETE`, no muestra la URL protegida
-del trigger ni el callback firmado y no informa éxito. El switch obtiene el callback con
-ARM `listCallbackUrl` y canaliza el valor directamente a `gh secret set`.
+Sin `-SetGitHubSecret`, el script termina como `INCOMPLETE`, no muestra la URL del
+trigger y no informa éxito. El switch canaliza el valor directamente a `gh secret set`.
 
 Un issue debe tener:
 
