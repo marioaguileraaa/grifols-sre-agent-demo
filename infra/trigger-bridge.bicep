@@ -72,6 +72,9 @@ resource bridge 'Microsoft.Logic/workflows@2019-05-01' = {
           }
           inputs: {
             method: 'POST'
+            retryPolicy: {
+              type: 'none'
+            }
             uri: '@parameters(\'sreTriggerUrl\')'
             headers: {
               'Content-Type': 'application/json'
