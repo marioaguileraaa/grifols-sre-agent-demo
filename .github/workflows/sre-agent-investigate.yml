@@ -57,7 +57,7 @@ jobs:
               dataClassification: "synthetic"
             }' > "$RUNNER_TEMP/sre-payload.json"
 
-      - name: Trigger Review-mode investigation
+      - name: Trigger Review-mode investigation through MSI bridge
         env:
           SRE_TRIGGER_URL: ${{ secrets.SRE_TRIGGER_URL }}
         run: |
