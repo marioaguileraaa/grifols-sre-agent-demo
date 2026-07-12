@@ -123,7 +123,7 @@ function Get-OptionalPropertyValue {
 function Invoke-AgentApi {
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('Delete', 'Get', 'Post', 'Put')]
+        [ValidateSet('Get', 'Post', 'Put')]
         [string] $Method,
         [Parameter(Mandatory)]
         [string] $Path,
@@ -253,7 +253,6 @@ $repositoryBody = @{
     properties = @{
         url = $RepositoryUrl
         type = 'GitHub'
-        authConnectorName = 'github'
         branch = 'main'
         description = 'Synthetic Grifols Plasma Supply SRE demo source'
     }
@@ -281,9 +280,9 @@ $existingRepositoryBranch = @(
     Get-OptionalPropertyValue -InputObject $existingRepositoryProperties -PropertyName 'branch'
     Get-OptionalPropertyValue -InputObject $existingRepository -PropertyName 'branch'
 ) | Where-Object { $null -ne $_ } | Select-Object -First 1
-$existingRepositoryAuthConnector = @(
-    Get-OptionalPropertyValue -InputObject $existingRepositoryProperties -PropertyName 'authConnectorName'
-    Get-OptionalPropertyValue -InputObject $existingRepository -PropertyName 'authConnectorName'
+$existingRepositoryType = @(
+    Get-OptionalPropertyValue -InputObject $existingRepositoryProperties -PropertyName 'type'
+    Get-OptionalPropertyValue -InputObject $existingRepository -PropertyName 'type'
 ) | Where-Object { $null -ne $_ } | Select-Object -First 1
 $existingCloneStatus = @(
     Get-OptionalPropertyValue -InputObject $existingRepositoryProperties -PropertyName 'cloneStatus'
@@ -292,19 +291,13 @@ $existingCloneStatus = @(
 $repositoryMatchesDesired = $null -ne $existingRepository `
     -and $existingRepositoryUrl -eq $RepositoryUrl `
     -and $existingRepositoryBranch -eq 'main' `
-    -and $existingRepositoryAuthConnector -eq 'github'
-$recreateCloneStatuses = @('NotStarted', 'Failed', 'Error', 'Canceled')
-
-if ($null -ne $existingRepository -and
-    (-not $repositoryMatchesDesired -or $existingCloneStatus -in $recreateCloneStatuses)) {
-    Invoke-AgentApi -Method Delete -Path "/api/v2/repos/$RepositoryName" -Body $null | Out-Null
-    Write-Host "Removed repository '$RepositoryName' because its source configuration or clone state requires recreation."
-    $existingRepository = $null
-}
+    -and $existingRepositoryType -eq 'GitHub'
 
 if ($null -eq $existingRepository) {
     Invoke-AgentApi -Method Put -Path "/api/v2/repos/$RepositoryName" -Body $repositoryBody | Out-Null
-    Write-Host "Created repository '$RepositoryName' with the GitHub auth connector."
+    Write-Host "Created repository '$RepositoryName'."
+} elseif (-not $repositoryMatchesDesired) {
+    throw "Repository '$RepositoryName' already exists with a different URL, type, or branch. Refusing destructive replacement."
 } elseif ($existingCloneStatus -eq 'Ready') {
     Write-Host "Reusing existing Ready repository '$RepositoryName'."
 } else {
