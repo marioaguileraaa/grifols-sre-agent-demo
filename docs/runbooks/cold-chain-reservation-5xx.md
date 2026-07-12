@@ -125,24 +125,27 @@ ninguna escritura se ejecuta sin aprobación explícita.
 
 ## 5. Trigger controlado
 
-El workflow solo usa el secreto `SRE_TRIGGER_URL`, sin Azure login, OIDC ni header
-`Authorization`. El secreto apunta al callback firmado de la Logic App Consumption
-`logic-grifols-sre-trigger-v1`, no directamente a `/api/v1/httptriggers/trigger/{id}`:
-el trigger de Azure SRE Agent exige bearer token.
+El endpoint `/api/v1/httptriggers/trigger/{id}` ya no es anónimo: requiere bearer token
+y una llamada directa sin autenticación devuelve `401 Authentication failed`. Para no
+llevar Azure login, OIDC, client credentials ni header `Authorization` a GitHub, el
+workflow solo usa `SRE_TRIGGER_URL` con el callback firmado de una Logic App Consumption.
 
-La identidad administrada del puente tiene únicamente `SRE Agent Standard User` sobre
-el recurso del agente. Reenvía el cuerpo JSON original con audience
-`https://azuresre.dev` y propaga status, body y content type; una respuesta downstream
-fallida no se convierte en éxito.
-La configuración completa requiere:
+La Logic App recibe JSON, reenvía el cuerpo original al trigger protegido con identidad
+administrada de sistema y audiencia `https://azuresre.dev`, y conserva el status, cuerpo
+y content type devueltos. Su identidad tiene exclusivamente `SRE Agent Standard User`
+(`2d84a65a-63b2-4343-bbb6-31105d857bc1`) sobre el recurso del agente, nunca
+Administrator ni permisos a nivel de resource group. Ese rol aporta el permiso requerido
+`Microsoft.App/agents/threads/write`. La configuración completa requiere:
 
 ```powershell
 .\scripts\configure-sre-agent.ps1 -SetGitHubSecret
 ```
 
-Sin `-SetGitHubSecret`, el script termina como `INCOMPLETE`, no muestra la URL protegida
-del trigger ni el callback firmado y no informa éxito. El switch obtiene el callback con
-ARM `listCallbackUrl` y canaliza el valor directamente a `gh secret set`.
+Después de crear y verificar el trigger, el script despliega idempotentemente
+`infra/trigger-bridge.bicep`, espera la identidad/RBAC, obtiene el callback mediante ARM
+`listCallbackUrl` y lo canaliza directamente a `gh secret set`. Sin
+`-SetGitHubSecret`, termina como `INCOMPLETE`. Nunca muestra bearer token, URL protegida,
+callback ni firma; `SRE_TRIGGER_URL` contiene el callback del bridge, no el trigger SRE.
 
 Un issue debe tener:
 
@@ -152,6 +155,10 @@ Un issue debe tener:
 Alternativamente, ejecutar `workflow_dispatch` con un `syntheticIncidentId` que empiece
 por `SYNTH-`. La respuesta
 correcta es HTTP `202`, `success=true` y `threadId` no vacío.
+
+Si la acción HTTP del bridge devuelve `401`, verificar que usa audiencia
+`https://azuresre.dev` y que su principal mantiene Standard User exactamente sobre el
+recurso `Microsoft.App/agents`. No ampliar a Administrator ni al resource group.
 
 ```powershell
 .\scripts\create-sample-issue.ps1

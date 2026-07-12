@@ -122,10 +122,12 @@ RBAC de `id-grifols-sre-v1`:
 - `SRE Agent Administrator` para `id-grifols-sre-v1` sobre el recurso del agente;
 - no se concede `Contributor` general.
 
-El puente externo `logic-grifols-sre-trigger-v1` es una Logic App Consumption con identidad
-administrada del sistema. Esa identidad recibe únicamente `SRE Agent Standard User`
-(`2d84a65a-63b2-4343-bbb6-31105d857bc1`) sobre el recurso del agente; no recibe
-Administrator ni permisos amplios en el resource group.
+El bridge externo es una Logic App Consumption separada, `logic-grifols-sre-trigger-v1`,
+con identidad administrada de sistema. Esa identidad recibe únicamente
+`SRE Agent Standard User` (`2d84a65a-63b2-4343-bbb6-31105d857bc1`) sobre el recurso
+`Microsoft.App/agents/sre-agent-grifols-v1`; no recibe Administrator ni permisos a
+nivel de resource group. Ese rol aporta `Microsoft.App/agents/threads/write`, que es
+el permiso requerido para invocar el trigger autenticado.
 
 Después del ARM/Bicep:
 
@@ -142,9 +144,9 @@ El script:
 4. crea el repositorio solo si falta; reutiliza índices compatibles, rechaza reemplazos destructivos y espera `cloneStatus=Ready`;
 5. valida que los conectores ARM de Log Analytics y Application Insights usan `id-grifols-sre-v1`;
 6. crea/actualiza y verifica `code-analyzer` con herramientas Azure CLI de lectura, ayuda y escritura; `Review` + `Low` mantiene toda escritura sujeta a aprobación explícita;
-7. crea o actualiza idempotentemente el HTTP trigger con `agentPrompt`, `agent` y `agentMode=Review`;
-8. despliega/actualiza `infra/trigger-bridge.bicep`, verifica identidad, autenticación MSI y RBAC Standard User, obtiene `listCallbackUrl` sin mostrarlo y espera su propagación;
-9. exige `-SetGitHubSecret`, canaliza únicamente el callback firmado del puente a GitHub y solo entonces completa la verificación.
+7. crea o actualiza y verifica idempotentemente el HTTP trigger protegido con `agentPrompt`, `agent` y `agentMode=Review`;
+8. despliega `infra/trigger-bridge.bicep` con la URL protegida como parámetro seguro, espera propagación y verifica la identidad y la asignación Standard User exacta sobre el agente;
+9. obtiene por ARM `listCallbackUrl` sin mostrarla, exige `-SetGitHubSecret` y canaliza únicamente el callback de la Logic App a `gh secret set SRE_TRIGGER_URL`.
 
 Las extensiones de conectores y los extras data-plane siguen usando APIs preview `2025-05-01-preview`/`api/v2`; el script falla de forma explícita si el contrato cambia.
 
@@ -158,7 +160,7 @@ $env:GITHUB_PAT = '<PAT con scope repo>'
 Remove-Item Env:GITHUB_PAT
 ```
 
-El script envía el PAT al almacenamiento seguro del dominio del agente y no lo imprime ni escribe en repositorio/disco. Sin `GITHUB_PAT` ni dominio ya autenticado, exige completar OAuth desde el portal de Azure SRE Agent y termina como `INCOMPLETE`; hay que repetir el script con `-SetGitHubSecret`. Sin ese switch también termina como `INCOMPLETE`: ni la URL protegida del agente ni el callback firmado se imprimen, y no se informa éxito hasta guardar `SRE_TRIGGER_URL`.
+El script envía el PAT al almacenamiento seguro del dominio del agente y no lo imprime ni escribe en repositorio/disco. Sin `GITHUB_PAT` ni dominio ya autenticado, inicia el flujo OAuth interactivo y termina como `INCOMPLETE`; hay que completar OAuth y repetir el script con `-SetGitHubSecret`. Sin ese switch también termina como `INCOMPLETE`: ni la URL protegida ni el callback firmado se imprimen y no se informa éxito hasta guardar `SRE_TRIGGER_URL`.
 
 ## Configuración del workflow controlado
 
@@ -169,7 +171,14 @@ El script envía el PAT al almacenamiento seguro del dominio del agente y no lo 
 
 El payload se construye con `jq --arg`, por lo que título/cuerpo/input no se interpolan como shell. El único secreto es `SRE_TRIGGER_URL`; no hay Azure login, OIDC, variables Azure, token ni header `Authorization`.
 
-El endpoint `/api/v1/httptriggers/trigger/{id}` **no es anónimo**: exige bearer token de Azure y permiso `Microsoft.App/agents/threads/write`. Por eso el secreto apunta al callback firmado de `logic-grifols-sre-trigger-v1`. La Logic App recibe el JSON, lo reenvía sin modificar al trigger protegido con Managed Identity y audience `https://azuresre.dev`, y propaga status, body y content type del agente. El workflow conserva sus comprobaciones estrictas: únicamente HTTP `202`, `success=true` y `threadId`.
+El endpoint actual `/api/v1/httptriggers/trigger/{id}` está protegido: una llamada sin
+bearer token devuelve `401 Authentication failed`. Por eso `SRE_TRIGGER_URL` apunta al
+callback firmado del Request trigger de la Logic App, no al endpoint SRE. La Logic App
+reenvía el JSON original con su identidad administrada, audiencia
+`https://azuresre.dev` y `Content-Type: application/json`. Devuelve al workflow el
+status, cuerpo y content type del SRE Agent sin convertir errores en éxitos. Así el
+workflow conserva su contrato de un solo secreto y sigue exigiendo HTTP `202`,
+`success=true` y `threadId`, sin credenciales Azure en GitHub.
 
 ```powershell
 # Crear el issue controlado
@@ -237,7 +246,8 @@ Consultar el runbook detallado en [`docs/runbooks/cold-chain-reservation-5xx.md`
 - [ ] `monthlyAgentUnitLimit=1000` y plataforma `AzMonitor`.
 - [ ] Conectores ARM, `cloneStatus`, subagente y filtro están validados por separado.
 - [ ] Frontend usa `/api`, Nginx usa `BACKEND_URL` y los probes finales están sanos.
-- [ ] `configure-sre-agent.ps1 -SetGitHubSecret` guardó el callback del puente en `SRE_TRIGGER_URL` sin mostrar su valor.
+- [ ] Logic App bridge usa identidad de sistema y solo Standard User sobre el agente.
+- [ ] `configure-sre-agent.ps1 -SetGitHubSecret` guardó el callback del bridge en `SRE_TRIGGER_URL` sin mostrar callback ni trigger protegido.
 - [ ] Workflow usa solo `SRE_TRIGGER_URL`, label `sre-investigate` y prefijo `[SYNTHETIC]`.
 - [ ] Mitigación requiere aprobación.
 - [ ] Recuperación devuelve tracking ID.
@@ -257,11 +267,13 @@ npm run build
 Pop-Location
 
 az bicep build --file .\infra\main.bicep
+az bicep build --file .\infra\trigger-bridge.bicep
+pwsh -NoLogo -NoProfile -File .\tests\TriggerBridge.Contract.Tests.ps1
 ```
 
 ## Costes
 
-El demo genera coste por Container Apps, Logic Apps Consumption, ingesta/retención de Log Analytics, Application Insights, ACR, Azure Monitor y unidades de Azure SRE Agent. ACR usa Basic, LAW retiene 30 días y las apps parten de una réplica mínima. El script fija el límite mensual activo en 1000 AAU; el consumo always-on puede quedar fuera de ese límite. Detener el incidente no elimina el coste base.
+El demo genera coste por Container Apps, ingesta/retención de Log Analytics, Application Insights, ACR, Azure Monitor, ejecuciones de Logic Apps y unidades de Azure SRE Agent. ACR usa Basic, LAW retiene 30 días y las apps parten de una réplica mínima. El script fija el límite mensual activo en 1000 AAU; el consumo always-on puede quedar fuera de ese límite. Detener el incidente no elimina el coste base.
 
 ## Limpieza
 
@@ -272,7 +284,7 @@ az resource list --subscription 5305e853-a63b-4b82-9a3f-6fde18c1a798 `
   --resource-group rg-demo-sre-agent-v1 --output table
 ```
 
-Eliminar solo los recursos etiquetados `purpose=sre-agent-demo` tras aprobación del propietario. Quitar también `SRE_TRIGGER_URL`, `logic-grifols-sre-trigger-v1`, su asignación `SRE Agent Standard User`, autenticación de dominio GitHub y las demás asignaciones RBAC específicas.
+Eliminar solo los recursos etiquetados `purpose=sre-agent-demo` tras aprobación del propietario. Quitar también `SRE_TRIGGER_URL`, la Logic App bridge, su asignación Standard User sobre el agente, autenticación de dominio GitHub y las demás asignaciones RBAC específicas.
 
 ## Troubleshooting
 
@@ -285,5 +297,6 @@ Eliminar solo los recursos etiquetados `purpose=sre-agent-demo` tras aprobación
 | No hay logs | comprobar `ContainerAppConsoleLogs_CL` y configuración LAW del environment |
 | ARM del agente funciona pero no extras | ejecutar `configure-sre-agent.ps1`; revisar rol Administrator, GitHub domain, `cloneStatus=Ready` y cada conector UAMI |
 | Token data-plane falla | `az login --scope "https://azuresre.dev/.default"` |
-| Workflow no obtiene 202 | revisar el callback guardado en `SRE_TRIGGER_URL`, el estado de `logic-grifols-sre-trigger-v1`, su rol `SRE Agent Standard User` en el agente y la ejecución downstream; no usar directamente `/api/v1/httptriggers/trigger/{id}` sin bearer token |
+| Workflow no obtiene 202 | confirmar que `SRE_TRIGGER_URL` contiene el callback de la Logic App y revisar el historial de acciones sin exponer URLs ni cuerpos sensibles |
+| Acción HTTP del bridge devuelve 401 | verificar audiencia `https://azuresre.dev`, identidad de sistema y rol `SRE Agent Standard User` exactamente sobre el recurso del agente; no sustituirlo por permisos RG o Administrator |
 | Configuración termina `INCOMPLETE` | completar OAuth si se solicita y volver a ejecutar con `-SetGitHubSecret`; `GITHUB_PAT` puede usarse solo en el entorno de proceso |
